@@ -1,14 +1,14 @@
 """
-MBA Program Dashboard — Project Pulse
-======================================
+Project Pulse — Dynamic Program Dashboard
+==========================================
 Streamlit app for Program Chairs, Faculty/Program Advisors, and the Dean.
 Features:
-- Clean cell-click navigation (leftmost checkbox column removed)
+- Dynamic Program Context (Multi-tenant ready)
+- Clean cell-click navigation
 - Strict View-Only vs Read/Write permission enforcement
 - Admin panel for User Permission Management & Security Audit Logs
 - Live 'Data Last Synchronized' timestamp
 - Dynamic Schema Mapping (IT/Admin configuration screen)
-- Top-level Executive Summary cards
 """
 
 import streamlit as st
@@ -16,9 +16,8 @@ import pandas as pd
 from sqlalchemy import text
 from datetime import datetime
 
-st.set_page_config(page_title="Project Pulse — MBA Dashboard", page_icon="🎓", layout="wide")
-
-CURRENT_TERM_LABEL = "1T, A.Y. 2024–2025"
+# Generic title (Dynamic titles are set after DB connection)
+st.set_page_config(page_title="Project Pulse — Program Dashboard", page_icon="🎓", layout="wide")
 
 # ------------------------------------------------------------------
 # ETHICAL VISUALIZATION SPECIFICATION (CIS310 Standards)
@@ -83,7 +82,7 @@ def log_security_event(username: str, role: str, event_type: str, details: str):
             )
             s.commit()
     except Exception as err:
-        st.sidebar.error(f"Audit log error: {err}")
+        pass
 
 def authenticate_user(username: str, password_attempt: str):
     query = text("""
@@ -99,12 +98,27 @@ def authenticate_user(username: str, password_attempt: str):
         st.error(f"Authentication query error: {e}")
         return None
 
+# ------------------------------------------------------------------
+# GLOBAL DASHBOARD CONFIGURATION (DYNAMIC CONTEXT)
+# ------------------------------------------------------------------
+@st.cache_data(ttl=60)
+def load_dashboard_config():
+    try:
+        res = conn.query("SELECT active_program, current_term FROM dashboard_config WHERE id = 1;", ttl=0)
+        if not res.empty:
+            return res.iloc[0]["active_program"], res.iloc[0]["current_term"]
+    except Exception:
+        pass
+    return "UNCONFIGURED PROGRAM", "UNCONFIGURED TERM"
+
+ACTIVE_PROGRAM, CURRENT_TERM_LABEL = load_dashboard_config()
+
 
 # ------------------------------------------------------------------
-# DATA LOADERS (DYNAMICALLY MAPPED)
+# DATA LOADERS (DYNAMICALLY MAPPED & FILTERED BY PROGRAM)
 # ------------------------------------------------------------------
 @st.cache_data(ttl=60, show_spinner="Loading mapped student roster...")
-def load_students() -> tuple[pd.DataFrame, str]:
+def load_students(target_program: str) -> tuple[pd.DataFrame, str]:
     df = conn.query("SELECT * FROM students;", ttl=0)
     
     try:
@@ -112,15 +126,20 @@ def load_students() -> tuple[pd.DataFrame, str]:
         db_to_app_map = dict(zip(mapping_df["db_column"], mapping_df["dashboard_field"]))
         df = df.rename(columns=db_to_app_map)
     except Exception as e:
-        st.sidebar.warning("Schema mapping table missing or misconfigured. Falling back to default names.")
+        st.sidebar.warning("Schema mapping table missing or misconfigured.")
 
+    # Added 'program' to the expected internal columns
     expected_cols = [
-        "first_name", "last_name", "student_number", "cohort", "coursework_status", 
+        "program", "first_name", "last_name", "student_number", "cohort", "coursework_status", 
         "comprehensive_exam", "capstone", "graduate_on_time", "graduate_date_term_sy", 
         "adviser", "remarks", "student_email"
     ]
     for col in expected_cols:
         if col not in df.columns: df[col] = None
+
+    # Filter strictly to the Active Program defined by the IT/Admin
+    if target_program != "UNCONFIGURED PROGRAM" and df["program"].notna().any():
+        df = df[df["program"].astype(str).str.strip().str.upper() == target_program.strip().upper()]
 
     if "full_name" not in df.columns or df["full_name"].isna().all():
         df["full_name"] = (df["first_name"].fillna("") + " " + df["last_name"].fillna("")).str.strip()
@@ -246,7 +265,10 @@ st.sidebar.caption(f"Role: **{user['role']}** | Permissions: **{'Read/Write' if 
 
 if user["role"] == "IT/Admin":
     if "admin_view" not in st.session_state: st.session_state.admin_view = "Dashboard"
-    selected_admin_view = st.sidebar.radio("IT Admin Settings", ["Dashboard", "Schema Mapping Config", "Permissions & Audit Logs"])
+    selected_admin_view = st.sidebar.radio(
+        "IT Admin Settings", 
+        ["Dashboard", "Global Instance Settings", "Schema Mapping Config", "Permissions & Audit Logs"]
+    )
     st.session_state.admin_view = selected_admin_view
 else:
     st.session_state.admin_view = "Dashboard"
@@ -259,7 +281,38 @@ if st.sidebar.button("🚪 Log Out", use_container_width=True):
     st.rerun()
 st.sidebar.markdown("---")
 
-st.title("🧑‍🎓 Project Pulse — MBA Program Dashboard")
+# Dynamic Top-level Header
+st.title(f"🧑‍🎓 Project Pulse — {ACTIVE_PROGRAM} Program Dashboard")
+
+
+# ------------------------------------------------------------------
+# VIEW: IT/ADMIN GLOBAL INSTANCE CONFIGURATION
+# ------------------------------------------------------------------
+def render_instance_settings():
+    st.subheader("⚙️ Global Instance Settings")
+    st.caption("Set the primary context for this dashboard instance. These settings apply globally to all users.")
+
+    with st.form("instance_config_form"):
+        new_program = st.text_input("Active Program Code (e.g., MBA, MSCS, BSB)", value=ACTIVE_PROGRAM)
+        new_term = st.text_input("Current Academic Term Label", value=CURRENT_TERM_LABEL)
+        
+        st.info("Ensure the 'Active Program Code' exactly matches the code stored in your database's underlying program column.")
+        
+        if st.form_submit_button("Update Global Dashboard Settings", type="primary"):
+            try:
+                with conn.session as s:
+                    s.execute(
+                        text("UPDATE dashboard_config SET active_program = :ap, current_term = :ct WHERE id = 1;"),
+                        {"ap": new_program.strip(), "ct": new_term.strip()}
+                    )
+                    s.commit()
+                log_security_event(user["username"], user["role"], "INSTANCE_CONFIG_UPDATED", f"Changed program to {new_program} and term to {new_term}.")
+                st.success("Global settings updated successfully! The dashboard will now automatically filter to the new program context.")
+                load_dashboard_config.clear()
+                load_students.clear()
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error updating configuration: {e}")
 
 
 # ------------------------------------------------------------------
@@ -317,13 +370,13 @@ def render_schema_mapping():
             except Exception as e:
                 st.error(f"Error saving mappings: {e}")
 
+
 # ------------------------------------------------------------------
 # VIEW: IT/ADMIN PERMISSION MANAGEMENT & AUDIT LOGS
 # ------------------------------------------------------------------
 def render_permissions_and_logs():
     st.subheader("🔐 Access Management & Security Audit Logs")
     
-    # ADDED: Third tab for system sync failures
     t_perms, t_logs, t_syslogs = st.tabs(["User Permissions", "Live Audit Logs", "System Sync Failures"])
     
     with t_perms:
@@ -363,7 +416,6 @@ def render_permissions_and_logs():
             use_container_width=True
         )
 
-    # ADDED: Logic to view server-side fallback logs
     with t_syslogs:
         st.caption("Tracks critical connection timeouts and schema errors (stored locally so they are accessible even if the database is completely offline).")
         import os
@@ -372,7 +424,7 @@ def render_permissions_and_logs():
                 logs = f.readlines()
             
             if logs:
-                st.code("".join(logs[-15:]), language="log")  # Show last 15 lines
+                st.code("".join(logs[-15:]), language="log")
                 if st.button("Clear Sync Logs", type="primary"):
                     os.remove("sync_error_log.txt")
                     st.success("Logs cleared.")
@@ -415,7 +467,7 @@ def render_student_list(df_all):
         l4.markdown(f"**{PALETTE['gray']['symbol']} Gray**\n{PALETTE['gray']['description']}")
     st.divider()
 
-    st.subheader("Student Roster & Lifecycle Progress")
+    st.subheader(f"Student Roster & Lifecycle Progress ({ACTIVE_PROGRAM})")
     search_col, cohort_col, sort_col = st.columns([2, 1, 1])
     with search_col: search_term = st.text_input("Search by name or student ID", placeholder="e.g. Adrian Santos or 2026124837")
     with cohort_col:
@@ -437,7 +489,7 @@ def render_student_list(df_all):
     filtered = filtered.sort_values(sort_map[sort_option]).reset_index(drop=True)
 
     if filtered.empty:
-        st.info("No results found. Try a different search term or cohort.")
+        st.info(f"No results found for the {ACTIVE_PROGRAM} program. Try a different search term, or verify the database mappings.")
         return
 
     display_df = filtered[[
@@ -451,7 +503,6 @@ def render_student_list(df_all):
 
     table_key = f"student_table_{st.session_state.table_key_counter}"
 
-    # selection_mode="single-cell" removes the circular checkbox column on the left edge
     event = st.dataframe(
         display_df,
         key=table_key,
@@ -471,7 +522,6 @@ def render_student_list(df_all):
         }
     )
 
-    # Listen directly for cell selection
     selected_row_idx = None
     if event and hasattr(event, "selection") and event.selection.get("cells"):
         selected_row_idx = event.selection["cells"][0][0]
@@ -500,7 +550,7 @@ def render_student_profile(df_all):
     match = df_all[df_all["student_email"] == email]
     
     if match.empty:
-        st.warning("Student record not found. Returning to directory.")
+        st.warning("Student record not found in the active program. Returning to directory.")
         go_to_list()
         st.rerun()
         return
@@ -552,23 +602,13 @@ def render_student_profile(df_all):
     with tab_remarks:
         st.markdown("##### Graduation Tracking & Advisor Notes")
         c1, c2 = st.columns(2)
-
-        # Clean fallback for Graduating On Time
+        
         raw_ontime = student.get("graduate_on_time")
-        display_ontime = (
-            str(raw_ontime).strip()
-            if pd.notna(raw_ontime) and str(raw_ontime).strip().lower() not in ("nan", "none", "")
-            else "Under Evaluation"
-        )
+        display_ontime = str(raw_ontime).strip() if pd.notna(raw_ontime) and str(raw_ontime).strip().lower() not in ("nan", "none", "") else "Under Evaluation"
         c1.write(f"**Graduating On Time:** {display_ontime}")
-
-        # Clean fallback for Target Graduation Term: To Be Determined (TBD)
+        
         raw_term = student.get("graduate_date_term_sy")
-        display_term = (
-            str(raw_term).strip()
-            if pd.notna(raw_term) and str(raw_term).strip().lower() not in ("nan", "none", "")
-            else "To Be Determined (TBD)"
-        )
+        display_term = str(raw_term).strip() if pd.notna(raw_term) and str(raw_term).strip().lower() not in ("nan", "none", "") else "To Be Determined (TBD)"
         c2.write(f"**Target Graduation Term:** {display_term}")
 
         is_authorized_editor = user.get("can_edit", False)
@@ -607,12 +647,7 @@ def render_student_profile(df_all):
 
             if submitted:
                 if not is_authorized_editor:
-                    log_security_event(
-                        username=user["username"],
-                        role=user["role"],
-                        event_type="UNAUTHORIZED_WRITE_ATTEMPT",
-                        details=f"Blocked attempt to update record for Student ID {student['student_number']} without edit permissions."
-                    )
+                    log_security_event(user["username"], user["role"], "UNAUTHORIZED_WRITE_ATTEMPT", f"Blocked attempt to update record for Student ID {student['student_number']} without edit permissions.")
                     st.error("⛔ Access Denied: Your account role is View-Only. This unauthorized attempt has been logged.")
                 else:
                     ce_db_map = {"Passed": "done", "In-Progress": "not yet taken", "Incomplete": "incomplete"}
@@ -658,12 +693,7 @@ def render_student_profile(df_all):
                             
                             s.commit()
                         
-                        log_security_event(
-                            username=user["username"],
-                            role=user["role"],
-                            event_type="STUDENT_RECORD_UPDATED",
-                            details=f"Modified record for Student ID {student['student_number']} (CW: {new_cw}, Exam: {new_ce}, Capstone: {new_cap})."
-                        )
+                        log_security_event(user["username"], user["role"], "STUDENT_RECORD_UPDATED", f"Modified record for Student ID {student['student_number']} (CW: {new_cw}, Exam: {new_ce}, Capstone: {new_cap}).")
                         st.success("Record successfully updated in Supabase!")
                         load_students.clear()
                         fetch_student_milestones.clear()
@@ -676,20 +706,20 @@ def render_student_profile(df_all):
 # ------------------------------------------------------------------
 # MASTER ROUTER (With Sync Error Handling)
 # ------------------------------------------------------------------
-# Initialize consecutive failure tracking
 if "consecutive_sync_failures" not in st.session_state:
     st.session_state.consecutive_sync_failures = 0
 
-if st.session_state.admin_view == "Schema Mapping Config":
+if st.session_state.admin_view == "Global Instance Settings":
+    render_instance_settings()
+elif st.session_state.admin_view == "Schema Mapping Config":
     render_schema_mapping()
 elif st.session_state.admin_view == "Permissions & Audit Logs":
     render_permissions_and_logs()
 else:
     try:
-        # Attempt to pull data
-        df_all, last_sync = load_students()
+        # Load specifically for the active program
+        df_all, last_sync = load_students(ACTIVE_PROGRAM)
         
-        # Reset counter on a successful sync
         st.session_state.consecutive_sync_failures = 0
         st.caption(f"🕒 **Data Last Synchronized:** `{last_sync}`")
         
@@ -699,21 +729,17 @@ else:
             render_student_list(df_all)
 
     except Exception as e:
-        # 1. Increment the failure counter
         st.session_state.consecutive_sync_failures += 1
         error_msg = str(e)
         
-        # 2. Write to local server log
         timestamp = datetime.now().strftime("%B %d, %Y at %I:%M:%S %p")
         with open("sync_error_log.txt", "a") as f:
             f.write(f"[{timestamp}] SYNC_FAILED: {error_msg}\n")
             
-        # 3. Repeated failures trigger warning banner
         if st.session_state.consecutive_sync_failures >= 3:
             st.error(f"🚨 **CRITICAL WARNING:** The dashboard has failed to synchronize with the database {st.session_state.consecutive_sync_failures} consecutive times. Please contact IT/Admin immediately to check the integration logs.", icon="🚨")
         else:
             st.warning("⚠️ **Warning:** A data synchronization error occurred. The system will retry on your next action.")
             
-        # Display the immediate reason
         st.error(f"**Detailed Error:** `{error_msg}`")
         st.stop()
