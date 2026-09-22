@@ -608,32 +608,96 @@ def render_student_list(df_all):
     exam_passed = len(df_all[df_all["comprehensive_exam_display"] == "Passed"])
     capstone_defended = len(df_all[df_all["capstone_display"] == "Defended for Completion"])
 
-    st.markdown(
-        """
-        <style>
-        .stButton button p, 
-        .stButton button span, 
-        .stButton button div {
-            font-weight: 700 !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    # --- Calculations ---
+    # On-Time Graduation Calculation
+    evaluated_df = df_all[
+        df_all["graduate_on_time"].notna() & 
+        (df_all["graduate_on_time"].astype(str).str.strip() != "") &
+        (~df_all["graduate_on_time"].astype(str).str.lower().isin(["n/a", "none"]))
+    ]
+    grad_denominator = len(evaluated_df)
+    grad_numerator = len(evaluated_df[evaluated_df["graduate_on_time"].astype(str).str.lower().isin(["yes", "y", "true", "1"])])
+    on_time_rate = (grad_numerator / grad_denominator * 100) if grad_denominator > 0 else 0.0
 
-    k1, k2, k3, k4, k_refresh = st.columns([1.2, 1.2, 1.2, 1.2, 0.8])
-    k1.metric("Total Cohort", total_students)
-    k2.metric("Coursework Cleared", cw_completed, delta=f"{(cw_completed / total_students * 100):.1f}%" if total_students else None)
-    k3.metric("Passed Comp Exam", exam_passed, delta=f"{(exam_passed / total_students * 100):.1f}%" if total_students else None)
-    k4.metric("Defended Capstones", capstone_defended, delta=f"{(capstone_defended / total_students * 100):.1f}%" if total_students else None)
+    # Overall Completion Calculation
+    fully_completed = len(
+        df_all[
+            (df_all["coursework_display"] == "Completed") & 
+            (df_all["comprehensive_exam_display"] == "Passed") & 
+            (df_all["capstone_display"] == "Defended for Completion")
+        ]
+    )
+    completion_rate = int((fully_completed / total_students * 100)) if total_students > 0 else 0
+
+    # --- ROW 1: Raw Milestone Counts & Refresh Button ---
+    top_c1, top_c2, top_c3, top_c4, top_refresh = st.columns([1, 1, 1, 1, 0.8])
     
-    with k_refresh:
+    top_c1.metric("Total Cohort", total_students)
+    top_c2.metric("Coursework", cw_completed)
+    top_c3.metric("Comp Exam", exam_passed)
+    top_c4.metric("Capstones", capstone_defended)
+
+    with top_refresh:
         st.write("")
-        if st.button("RE-SYNC", use_container_width=True):
+        if st.button("🔄 Refresh", use_container_width=True):
             load_students.clear()
             fetch_student_courses.clear()
             fetch_student_milestones.clear()
             st.rerun()
+
+    st.write("") # Vertical buffer
+
+   # --- ROW 2: Executive Percentages in Styled Cards ---
+    st.markdown(
+        """
+        <style>
+        /* Card styling for the main metric box */
+        div[data-testid="stMetric"] {
+            background-color: #ffffff;
+            border: 1px solid #e6e6f2;
+            border-radius: 8px;
+            padding: 15px 20px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            border-top: 4px solid #c8102e; 
+        }
+        
+        /* Style the Title (e.g. ON-TIME GRAD RATE) */
+        div[data-testid="stMetricLabel"] > div > p {
+            text-transform: uppercase !important;
+            font-size: 0.75rem !important;
+            font-weight: 600 !important;
+            color: #7b809a !important;
+            letter-spacing: 0.5px !important;
+        }
+        
+        /* Style the Main Number (e.g. 58.0%) */
+        div[data-testid="stMetricValue"] > div {
+            font-size: 2rem !important;
+            font-weight: 700 !important;
+            color: #344767 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    bot_c1, bot_c2, spacer = st.columns([1.2, 1.2, 3.4])
+    
+    bot_c1.metric(
+        label="On-Time Grad Rate", 
+        value=f"{on_time_rate:.1f}%", 
+        delta=f"{grad_numerator} of {grad_denominator} evaluated",
+        delta_color="off",
+        help=f"**Calculation Logic:**\n\n*Numerator:* Students flagged as graduating on time ({grad_numerator})\n*Denominator:* Total students with a recorded graduation status ({grad_denominator})\n*Period:* {CURRENT_TERM_LABEL}"
+    )
+
+    bot_c2.metric(
+        label="Overall Completion",
+        value=f"{completion_rate}%",
+        delta=f"{fully_completed} out of {total_students} cohort",
+        delta_color="off",
+        help="Percentage of the total cohort that has completed coursework, passed the comprehensive exam, and defended the capstone."
+    )
 
     st.divider()
 
@@ -707,6 +771,9 @@ def render_student_list(df_all):
 
     table_key = f"student_table_{st.session_state.table_key_counter}"
 
+# ---> PASTE BLOCK 2 HERE <---
+    st.subheader("Program Roster", anchor="student-roster-table")
+    
     event = st.dataframe(
         styled_df,
         key=table_key,
