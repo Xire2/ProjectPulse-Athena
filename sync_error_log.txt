@@ -6,3 +6,7 @@ connection to server at "aws-0-ap-northeast-1.pooler.supabase.com" (52.68.3.1), 
 connection to server at "aws-0-ap-northeast-1.pooler.supabase.com" (52.68.3.1), port 5432 failed: FATAL:  password authentication failed for user "postgres"
 
 (Background on this error at: https://sqlalche.me/e/20/e3q8)
+[September 18, 2026 at 03:36:11 PM] SYNC_FAILED: name 'event' is not defined
+[September 18, 2026 at 03:36:31 PM] SYNC_FAILED: name 'event' is not defined
+[September 18, 2026 at 03:52:05 PM] SYNC_FAILED: name 'gb' is not defined
+[September 18, 2026 at 05:46:37 PM] SYNC_FAILED: Cannot convert tz-naive timestamps, use tz_localize to localize
