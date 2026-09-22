@@ -15,6 +15,7 @@ import streamlit as st
 import pandas as pd
 from sqlalchemy import text
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # Generic title (Dynamic titles are set after DB connection)
 st.set_page_config(page_title="Project Pulse — Program Dashboard", page_icon="🎓", layout="wide")
@@ -23,33 +24,97 @@ st.set_page_config(page_title="Project Pulse — Program Dashboard", page_icon="
 # ETHICAL VISUALIZATION SPECIFICATION (CIS310 Standards)
 # ------------------------------------------------------------------
 PALETTE = {
-    "green": {"hex": "#009E73", "symbol": "🟢", "description": "Passed / Completed / Defended (On Track)"},
-    "yellow": {"hex": "#E69F00", "symbol": "🟡", "description": "In-Progress / Pending Clearance"},
-    "red": {"hex": "#D55E00", "symbol": "🔴", "description": "Cancelled / Incomplete / Action Required"},
+    "green": {"hex": "#0DC249", "symbol": "🟢", "description": "Passed / Completed / Defended (On Track)"},
+    "yellow": {"hex": "#FFAE00", "symbol": "🟡", "description": "In-Progress / Pending Clearance"},
+    "red": {"hex": "#D50000", "symbol": "🔴", "description": "Cancelled / Incomplete / Action Required"},
+    "blue": {"hex": "#0072B2", "symbol": "🔵", "description": "Active (Ongoing, Not Yet Graduated)"},
     "gray": {"hex": "#999999", "symbol": "⚪", "description": "Not Started / Not Applicable / Unknown"},
 }
 
 STAGE_THRESHOLDS = {
     "coursework": {"green": ["Completed"], "yellow": ["Pending"], "red": ["Cancelled"]},
-    "comprehensive_exam": {"green": ["Passed"], "yellow": ["In-Progress"], "red": ["Incomplete"]},
-    "capstone": {"green": ["Defended for Completion"], "yellow": ["In-Progress"], "red": ["Incomplete"]},
+    "comprehensive_exam": {"green": ["Passed"], "yellow": ["In-Progress"], "red": ["Incomplete", "Cancelled"]},  # Added "Cancelled"
+    "capstone": {"green": ["Defended for Completion"], "yellow": ["In-Progress"], "red": ["Incomplete", "Cancelled"]},        # Added "Cancelled"
 }
 
 COURSEWORK_MAP = {"completed": "Completed", "cancelled": "Cancelled", "pending": "Pending"}
-COMPREHENSIVE_EXAM_MAP = {"done": "Passed", "incomplete": "Incomplete", "not yet taken": "In-Progress", "abs/failed": "Incomplete"}
-CAPSTONE_MAP = {"done": "Defended for Completion", "not yet done": "In-Progress", "not yet taken": "In-Progress", "in current load": "In-Progress", "incomplete": "In-Progress", "n/a": "In-Progress"}
+
+COMPREHENSIVE_EXAM_MAP = {
+    "done": "Passed", 
+    "incomplete": "Incomplete", 
+    "not yet taken": "In-Progress", 
+    "abs/failed": "Incomplete",
+    "cancelled": "Cancelled"  # <--- Added here
+}
+
+CAPSTONE_MAP = {
+    "done": "Defended for Completion", 
+    "not yet done": "In-Progress", 
+    "not yet taken": "In-Progress", 
+    "in current load": "In-Progress", 
+    "incomplete": "In-Progress", 
+    "n/a": "In-Progress",
+    "cancelled": "Cancelled"  # <--- Added here
+}
 
 def map_status(raw_value, mapping, default="Unknown"):
     if raw_value is None or pd.isna(raw_value): return default
     return mapping.get(str(raw_value).strip().lower(), default)
 
+
+# ------------------------------------------------------------------
+# BADGE / PILL RENDERING (replaces emoji-dot indicators)
+# ------------------------------------------------------------------
+def render_pill(label: str, color_key: str) -> str:
+    """Returns an HTML pill badge — rounded border, tinted background, colored text.
+    Only safe to use with st.markdown(..., unsafe_allow_html=True) or similar."""
+    c = PALETTE.get(color_key, PALETTE["gray"])
+    hex_color = c["hex"]
+    return (
+        f'<span style="display:inline-block;padding:3px 14px;border-radius:999px;'
+        f'border:1.5px solid {hex_color};color:{hex_color};background-color:{hex_color}1A;'
+        f'font-size:0.85rem;font-weight:600;white-space:nowrap;line-height:1.4;">{label}</span>'
+    )
+
 def get_stage_badge(stage: str, status_label: str) -> str:
+    """HTML pill badge for a specific lifecycle stage. Use only where unsafe_allow_html=True
+    is set (e.g. the student profile page), NOT inside st.dataframe cells."""
     rule = STAGE_THRESHOLDS.get(stage, {})
     clean_label = str(status_label).strip()
-    if clean_label in rule.get("green", []): return f"{PALETTE['green']['symbol']} {clean_label}"
-    if clean_label in rule.get("yellow", []): return f"{PALETTE['yellow']['symbol']} {clean_label}"
-    if clean_label in rule.get("red", []): return f"{PALETTE['red']['symbol']} {clean_label}"
-    return f"{PALETTE['gray']['symbol']} {clean_label}"
+    if clean_label in rule.get("green", []): color_key = "green"
+    elif clean_label in rule.get("yellow", []): color_key = "yellow"
+    elif clean_label in rule.get("red", []): color_key = "red"
+    else: color_key = "gray"
+    return render_pill(clean_label, color_key)
+
+def make_status_styler(stage: str):
+    """Returns a pandas Styler-compatible function that highlights a status column's
+    cells with tinted background + bold colored text, for use inside st.dataframe
+    (which cannot render real HTML pills, only cell-level color styling)."""
+    def _style(series):
+        rule = STAGE_THRESHOLDS.get(stage, {})
+        styles = []
+        for val in series:
+            label = str(val).strip()
+            if label in rule.get("green", []): hexc = PALETTE["green"]["hex"]
+            elif label in rule.get("yellow", []): hexc = PALETTE["yellow"]["hex"]
+            elif label in rule.get("red", []): hexc = PALETTE["red"]["hex"]
+            else: hexc = PALETTE["gray"]["hex"]
+            styles.append(f"color: {hexc}; background-color: {hexc}1A; font-weight: 600; border-radius: 4px;")
+        return styles
+    return _style
+
+def status_badge(label: str) -> str:
+    """HTML pill badge for the generic Overall Status field. Use with unsafe_allow_html=True."""
+    key_map = {
+        "Completed": "green", "Passed": "green", "Defended for Completion": "green",
+        "Graduated": "green", "Enrolled": "green",
+        "Active": "blue",
+        "In-Progress": "yellow", "Pending": "yellow", "Conditionally Enrolled": "yellow",
+        "Cancelled": "red", "Incomplete": "red",
+    }
+    color_key = key_map.get(str(label), "gray")
+    return render_pill(str(label), color_key)
 
 def overall_status(row) -> str:
     if "overall_status" in row and pd.notna(row["overall_status"]) and str(row["overall_status"]).strip():
@@ -119,7 +184,11 @@ ACTIVE_PROGRAM, CURRENT_TERM_LABEL = load_dashboard_config()
 # ------------------------------------------------------------------
 @st.cache_data(ttl=60, show_spinner="Loading mapped student roster...")
 def load_students(target_program: str) -> tuple[pd.DataFrame, str]:
-    df = conn.query("SELECT * FROM students;", ttl=0)
+    # Ensure we select updated_at from the students table if it exists
+    try:
+        df = conn.query("SELECT * FROM students;", ttl=0)
+    except Exception:
+        df = pd.DataFrame()
     
     try:
         mapping_df = conn.query("SELECT dashboard_field, db_column FROM field_mappings;")
@@ -128,16 +197,25 @@ def load_students(target_program: str) -> tuple[pd.DataFrame, str]:
     except Exception as e:
         st.sidebar.warning("Schema mapping table missing or misconfigured.")
 
-    # Added 'program' to the expected internal columns
     expected_cols = [
         "program", "first_name", "last_name", "student_number", "cohort", "coursework_status", 
         "comprehensive_exam", "capstone", "graduate_on_time", "graduate_date_term_sy", 
-        "adviser", "remarks", "student_email"
+        "adviser", "remarks", "student_email", "updated_at"
     ]
     for col in expected_cols:
         if col not in df.columns: df[col] = None
 
-    # Filter strictly to the Active Program defined by the IT/Admin
+    def to_manila_time(series):
+        dt = pd.to_datetime(series, errors="coerce")
+        if dt.dt.tz is None:
+            dt = dt.dt.tz_localize("UTC")
+        return dt.dt.tz_convert("Asia/Manila").dt.strftime("%B %d, %Y at %I:%M %p")
+
+    if "updated_at" in df.columns and df["updated_at"].notna().any():
+        df["coursework_updated_at"] = to_manila_time(df["updated_at"]).fillna("N/A")
+    else:
+        df["coursework_updated_at"] = "N/A"
+        
     if target_program != "UNCONFIGURED PROGRAM" and df["program"].notna().any():
         df = df[df["program"].astype(str).str.strip().str.upper() == target_program.strip().upper()]
 
@@ -153,11 +231,17 @@ def load_students(target_program: str) -> tuple[pd.DataFrame, str]:
     df["comprehensive_exam_display"] = df["comprehensive_exam"].apply(lambda v: map_status(v, COMPREHENSIVE_EXAM_MAP))
     df["capstone_display"] = df["capstone"].apply(lambda v: map_status(v, CAPSTONE_MAP))
 
+    # Safely handle coursework timestamp formatting
+    if "updated_at" in df.columns and df["updated_at"].notna().any():
+        df["coursework_updated_at"] = pd.to_datetime(df["updated_at"], errors="coerce").dt.strftime("%B %d, %Y at %I:%M %p").fillna("N/A")
+    else:
+        df["coursework_updated_at"] = "N/A"
+
     df["coursework_indicator"] = df["coursework_display"].apply(lambda v: get_stage_badge("coursework", v))
     df["exam_indicator"] = df["comprehensive_exam_display"].apply(lambda v: get_stage_badge("comprehensive_exam", v))
     df["capstone_indicator"] = df["capstone_display"].apply(lambda v: get_stage_badge("capstone", v))
 
-    sync_time = datetime.now().strftime("%B %d, %Y at %I:%M:%S %p")
+    sync_time = datetime.now(ZoneInfo("Asia/Manila")).strftime("%B %d, %Y at %I:%M:%S %p")
     return df, sync_time
 
 @st.cache_data(ttl=60)
@@ -180,26 +264,26 @@ def fetch_student_courses(student_number: int) -> pd.DataFrame:
 def fetch_student_milestones(student_number: int) -> pd.DataFrame:
     query = f"""
         SELECT 
+            milestone_type,
             INITCAP(REPLACE(milestone_type, '_', ' ')) AS "Milestone",
-            INITCAP(status) AS "Recorded Status"
+            INITCAP(status) AS "Recorded Status",
+            updated_at AS "Last Updated"
         FROM student_milestones
         WHERE student_number = {int(student_number)}
         ORDER BY milestone_type ASC;
     """
-    try: return conn.query(query, ttl=0)
-    except Exception: return pd.DataFrame()
-
-def status_badge(label: str) -> str:
-    colors = {
-        "Completed": "green", "Passed": "green", "Defended for Completion": "green",
-        "Graduated": "green", "Active": "blue", "Enrolled": "green", "In-Progress": "orange",
-        "Pending": "orange", "Conditionally Enrolled": "orange", "Cancelled": "red", 
-        "Incomplete": "red", "Unknown": "gray",
-    }
-    color = colors.get(str(label), "gray")
-    return f":{color}[**{label}**]"
-
-
+    try: 
+        df = conn.query(query, ttl=0)
+        if not df.empty and "Last Updated" in df.columns and df["Last Updated"].notna().any():
+            dt = pd.to_datetime(df["Last Updated"], errors="coerce")
+            if dt.dt.tz is None:
+                dt = dt.dt.tz_localize("UTC")
+            df["Last Updated"] = dt.dt.tz_convert("Asia/Manila").dt.strftime("%B %d, %Y at %I:%M %p")
+        return df
+    except Exception: 
+        return pd.DataFrame()
+    
+    
 # ------------------------------------------------------------------
 # SESSION STATE MANAGEMENT
 # ------------------------------------------------------------------
@@ -223,8 +307,31 @@ def go_to_list():
 # VIEW: LOGIN PAGE
 # ------------------------------------------------------------------
 def render_login_page():
-    st.markdown("<h1 style='text-align: center;'>🧑‍🎓 Project Pulse Student Management Portal</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: gray;'>Group 1 Dashboard Demo</p>", unsafe_allow_html=True)
+    st.markdown(
+        """
+        <style>
+        .stButton > button[kind="primary"] {
+            background-color: #b92b27 !important;
+            border-color: #b92b27 !important;
+            color: white !important;
+        }
+        .stButton > button[kind="primary"] p, 
+        .stButton > button[kind="primary"] span {
+            color: white !important;
+        }
+        .stButton > button[kind="primary"]:hover {
+            background-color: #FF4B4B !important;
+            border-color: #FF4B4B !important;
+            color: white !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    logo_left, logo_center, logo_right = st.columns([2, 1, 2])
+    with logo_center:
+        st.image("rectangle_logo.png", width=500)  # Adjust pixel width here (e.g., 150, 180, 220)
+    st.markdown("<p style='text-align: center; color: gray;'>Project Pulse Student Management Portal</p>", unsafe_allow_html=True)
     st.divider()
 
     _, col_mid, _ = st.columns([1, 1.2, 1])
@@ -260,6 +367,7 @@ if not st.session_state.authenticated:
 # AUTHENTICATED USER HEADER & NAVIGATION
 # ------------------------------------------------------------------
 user = st.session_state.user_info
+st.sidebar.image("square_logo.png", use_container_width=True)
 st.sidebar.title(f"👤 {user['full_name']}")
 st.sidebar.caption(f"Role: **{user['role']}** | Permissions: **{'Read/Write' if user.get('can_edit', False) else 'View-Only'}**")
 
@@ -273,16 +381,71 @@ if user["role"] == "IT/Admin":
 else:
     st.session_state.admin_view = "Dashboard"
 
-if st.sidebar.button("🚪 Log Out", use_container_width=True):
-    st.session_state.authenticated = False
-    st.session_state.user_info = None
-    st.session_state.selected_student_email = None
-    st.session_state.page = "list"
-    st.rerun()
+# --- ROBUST CSS FOR RED LOG OUT BUTTON ---
+st.markdown(
+    """
+    <style>
+    /* Target all buttons inside the sidebar container */
+    section[data-testid="stSidebar"] button {
+        background-color: #b92b27 !important;
+        color: white !important;
+        border-color: #b92b27 !important;
+    }
+    /* Force text elements inside the sidebar button to be white */
+    section[data-testid="stSidebar"] button p, 
+    section[data-testid="stSidebar"] button span {
+        color: white !important;
+    }
+    /* Hover state */
+    section[data-testid="stSidebar"] button:hover {
+        background-color: #FF4B4B !important;
+        color: white !important;
+        border-color: #FF4B4B !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+if st.sidebar.button("Log Out", use_container_width=True):
+  st.session_state.authenticated = False
+  st.session_state.user_info = None
+  st.session_state.selected_student_email = None
+  st.session_state.page = "list"
+  st.rerun()
+
 st.sidebar.markdown("---")
 
-# Dynamic Top-level Header
-st.title(f"🧑‍🎓 Project Pulse — {ACTIVE_PROGRAM} Program Dashboard")
+# ------------------------------------------------------------------
+# STYLED BANNER HEADER
+# ------------------------------------------------------------------
+st.markdown(f"""
+    <div style="
+        background-color: #b92b27; 
+        padding: 20px 25px; 
+        border-radius: 8px; 
+        color: white; 
+        margin-bottom: 20px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    ">
+        <div style="
+            font-size: 11px; 
+            letter-spacing: 1.2px; 
+            font-weight: 600; 
+            margin-bottom: 6px; 
+            opacity: 0.85;
+        ">
+            MAPÚA UNIVERSITY · ASU PATHWAYS · ETYSB
+        </div>
+        <div style="
+            font-size: 24px; 
+            font-weight: 700; 
+            line-height: 1.3;
+        ">
+            Success Advisor Dashboard — {ACTIVE_PROGRAM} Program
+        </div>
+    </div>
+""", unsafe_allow_html=True)
 
 
 # ------------------------------------------------------------------
@@ -439,11 +602,24 @@ def render_permissions_and_logs():
 # VIEW 1: STUDENT ROSTER (Dashboard)
 # ------------------------------------------------------------------
 def render_student_list(df_all):
-    st.markdown(f"#### 🏛️ Executive Summary — {CURRENT_TERM_LABEL}")
+    st.markdown(f"#### Executive Summary — {CURRENT_TERM_LABEL}")
     total_students = len(df_all)
     cw_completed = len(df_all[df_all["coursework_display"] == "Completed"])
     exam_passed = len(df_all[df_all["comprehensive_exam_display"] == "Passed"])
     capstone_defended = len(df_all[df_all["capstone_display"] == "Defended for Completion"])
+
+    st.markdown(
+        """
+        <style>
+        .stButton button p, 
+        .stButton button span, 
+        .stButton button div {
+            font-weight: 700 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
     k1, k2, k3, k4, k_refresh = st.columns([1.2, 1.2, 1.2, 1.2, 0.8])
     k1.metric("Total Cohort", total_students)
@@ -453,18 +629,12 @@ def render_student_list(df_all):
     
     with k_refresh:
         st.write("")
-        if st.button("🔄 Refresh", use_container_width=True):
+        if st.button("RE-SYNC", use_container_width=True):
             load_students.clear()
             fetch_student_courses.clear()
             fetch_student_milestones.clear()
             st.rerun()
 
-    with st.expander("ℹ️ Dean's Status Indicator Legend (CIS310 Accessible Palette)", expanded=False):
-        l1, l2, l3, l4 = st.columns(4)
-        l1.markdown(f"**{PALETTE['green']['symbol']} Green**\n{PALETTE['green']['description']}")
-        l2.markdown(f"**{PALETTE['yellow']['symbol']} Amber**\n{PALETTE['yellow']['description']}")
-        l3.markdown(f"**{PALETTE['red']['symbol']} Red**\n{PALETTE['red']['description']}")
-        l4.markdown(f"**{PALETTE['gray']['symbol']} Gray**\n{PALETTE['gray']['description']}")
     st.divider()
 
     st.subheader(f"Student Roster & Lifecycle Progress ({ACTIVE_PROGRAM})")
@@ -492,25 +662,60 @@ def render_student_list(df_all):
         st.info(f"No results found for the {ACTIVE_PROGRAM} program. Try a different search term, or verify the database mappings.")
         return
 
+    # NOTE: st.dataframe renders through a canvas-based grid, so it cannot draw real
+    # HTML pill badges (rounded borders, padding) inside cells — only cell-level
+    # color/background styling via a pandas Styler. That's what we apply below to
+    # get a "highlighted" look (bold colored text on a tinted background) while
+    # keeping click-to-navigate selection working.
+
+    st.markdown("""
+        <style>
+            [data-testid="stDataFrame"] td[style*="background-color"] {
+                display: inline-flex !important;
+                align-items: center !important;
+                margin: 6px 4px !important;
+                padding: 3px 12px !important;
+                border-radius: 999px !important;
+                border: 1.5px solid currentColor !important;
+                background-clip: padding-box !important;
+            }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    # 1. Keep names as clean plain text strings
     display_df = filtered[[
         "full_name", "student_number", "cohort", "overall_status",
-        "coursework_indicator", "exam_indicator", "capstone_indicator", "adviser"
+        "coursework_display", "comprehensive_exam_display", "capstone_display", "adviser"
     ]].rename(columns={
         "full_name": "Name", "student_number": "Student ID", "cohort": "Cohort",
-        "overall_status": "Overall Status", "coursework_indicator": "Coursework",
-        "exam_indicator": "Comp Exam", "capstone_indicator": "Capstone", "adviser": "Adviser"
+        "overall_status": "Overall Status", "coursework_display": "Coursework",
+        "comprehensive_exam_display": "Comp Exam", "capstone_display": "Capstone", "adviser": "Adviser"
     })
+
+    # 2. Add a helper styler for making the Name column bold
+    def style_bold_name(series):
+        return ["font-weight: bold;" for _ in series]
+
+    # 3. Apply both the name style and the status highlighters to the styler
+    styled_df = (
+        display_df.style
+        .apply(style_bold_name, subset=["Name"])
+        .apply(make_status_styler("coursework"), subset=["Coursework"])
+        .apply(make_status_styler("comprehensive_exam"), subset=["Comp Exam"])
+        .apply(make_status_styler("capstone"), subset=["Capstone"])
+    )
 
     table_key = f"student_table_{st.session_state.table_key_counter}"
 
     event = st.dataframe(
-        display_df,
+        styled_df,
         key=table_key,
         hide_index=True,
         use_container_width=True,
         on_select="rerun",
         selection_mode="single-cell",
         column_config={
+            # Keep Name as a standard TextColumn since styling handles the boldness
             "Name": st.column_config.TextColumn("Student Name", width="medium"),
             "Student ID": st.column_config.TextColumn("Student ID", width="small"),
             "Cohort": st.column_config.TextColumn("Cohort", width="small"),
@@ -562,27 +767,45 @@ def render_student_profile(df_all):
     info1.write(f"**Student ID:** `{student['student_number']}`")
     info2.write(f"**Email:** [{student['student_email']}](mailto:{student['student_email']})")
     info3.write(f"**Cohort:** {student['cohort'] if pd.notna(student['cohort']) else 'N/A'}")
-    info4.write(f"**Overall Status:** {status_badge(student['overall_status'])}")
+    info4.markdown(f"**Overall Status:** {status_badge(student['overall_status'])}", unsafe_allow_html=True)
 
     st.divider()
     st.markdown("#### Program Lifecycle Summary")
+
+    milestones_df = fetch_student_milestones(student["student_number"])
+    
+    ce_updated = "N/A"
+    cap_updated = "N/A"
+    if not milestones_df.empty:
+        for _, m_row in milestones_df.iterrows():
+            if m_row.get("milestone_type") == "comprehensive_exam":
+                ce_updated = m_row.get("Last Updated", "N/A")
+            elif m_row.get("milestone_type") == "capstone":
+                cap_updated = m_row.get("Last Updated", "N/A")
+
+    cw_updated = student.get('coursework_updated_at', 'N/A')
 
     p1, p2, p3 = st.columns(3)
     with p1:
         with st.container(border=True):
             st.markdown("**📚 Coursework Stage**")
-            st.markdown(student["coursework_indicator"])
+            st.markdown(student["coursework_indicator"], unsafe_allow_html=True)
             st.caption(f"Status: {student['coursework_display']}")
+            st.caption(f"🕒 Last Updated: `{cw_updated}`") # <--- Added coursework timestamp
+            
     with p2:
         with st.container(border=True):
             st.markdown("**📝 Comprehensive Examination**")
-            st.markdown(student["exam_indicator"])
+            st.markdown(student["exam_indicator"], unsafe_allow_html=True)
             st.caption(f"Status: {student['comprehensive_exam_display']}")
+            st.caption(f"🕒 Last Updated: `{ce_updated}`") # <--- Added comp exam timestamp
+            
     with p3:
         with st.container(border=True):
             st.markdown("**🎓 Capstone & Defense**")
-            st.markdown(student["capstone_indicator"])
+            st.markdown(student["capstone_indicator"], unsafe_allow_html=True)
             st.caption(f"Adviser: **{student.get('adviser') or 'Unassigned'}**")
+            st.caption(f"🕒 Last Updated: `{cap_updated}`") # <--- Added capstone timestamp
 
     st.divider()
     tab_courses, tab_milestones, tab_remarks = st.tabs(["📖 Course Progress", "🚩 Lifecycle Milestones", "📝 Remarks & Admin Actions"])
@@ -660,33 +883,37 @@ def render_student_profile(df_all):
                                 adv_res = s.execute(text("SELECT adviser_id FROM advisers WHERE full_name = :name"), {"name": new_adv}).fetchone()
                                 if adv_res: adv_id = adv_res[0]
                                     
+                            # Update coursework with current timestamp (NOW())
                             s.execute(
                                 text("""
                                     UPDATE students_normalized 
                                     SET coursework_status = :cw, 
                                         remarks = :rem,
-                                        adviser_id = :adv
+                                        adviser_id = :adv,
+                                        updated_at = NOW()
                                     WHERE student_number = :sn;
                                 """),
                                 {"cw": new_cw.upper(), "rem": new_remarks, "adv": adv_id, "sn": int(student["student_number"])}
                             )
                             
+                            # Update or Insert comprehensive exam milestone with current timestamp
                             s.execute(
                                 text("""
-                                    INSERT INTO student_milestones (student_number, milestone_type, status) 
-                                    VALUES (:sn, 'comprehensive_exam', :st) 
+                                    INSERT INTO student_milestones (student_number, milestone_type, status, updated_at) 
+                                    VALUES (:sn, 'comprehensive_exam', :st, NOW()) 
                                     ON CONFLICT (student_number, milestone_type) 
-                                    DO UPDATE SET status = EXCLUDED.status;
+                                    DO UPDATE SET status = EXCLUDED.status, updated_at = NOW();
                                 """),
                                 {"sn": int(student["student_number"]), "st": ce_db_map.get(new_ce, "incomplete")}
                             )
                             
+                            # Update or Insert capstone milestone with current timestamp
                             s.execute(
                                 text("""
-                                    INSERT INTO student_milestones (student_number, milestone_type, status) 
-                                    VALUES (:sn, 'capstone', :st) 
+                                    INSERT INTO student_milestones (student_number, milestone_type, status, updated_at) 
+                                    VALUES (:sn, 'capstone', :st, NOW()) 
                                     ON CONFLICT (student_number, milestone_type) 
-                                    DO UPDATE SET status = EXCLUDED.status;
+                                    DO UPDATE SET status = EXCLUDED.status, updated_at = NOW();
                                 """),
                                 {"sn": int(student["student_number"]), "st": cap_db_map.get(new_cap, "incomplete")}
                             )
@@ -704,6 +931,23 @@ def render_student_profile(df_all):
 
 
 # ------------------------------------------------------------------
+# FOOTER HELPER
+# ------------------------------------------------------------------
+def render_footer(last_sync_time):
+    # REPLACE datetime.now() WITH ZoneInfo:
+    current_render_time = datetime.now(ZoneInfo("Asia/Manila")).strftime("%B %d, %Y %I:%M %p")
+    
+    st.divider()
+    st.markdown(
+        f"<div style='text-align: center; color: gray; font-size: 0.8rem; line-height: 1.6; padding-bottom: 20px;'>"
+        f"Mapúa University · ETYSB Success Advisor Dashboard · Streamlit build for OBE Agile Pilot Sprint Review<br>"
+        f"Data source: Supabase (Live Normalized DB) · Data last synced: <b>{last_sync_time}</b> · Rendered <b>{current_render_time}</b>."
+        f"</div>",
+        unsafe_allow_html=True
+    )
+
+
+# ------------------------------------------------------------------
 # MASTER ROUTER (With Sync Error Handling)
 # ------------------------------------------------------------------
 if "consecutive_sync_failures" not in st.session_state:
@@ -717,18 +961,25 @@ elif st.session_state.admin_view == "Permissions & Audit Logs":
     render_permissions_and_logs()
 else:
     try:
-        # Load specifically for the active program
+        # Step A: Fetch dataset and synchronization timestamp
         df_all, last_sync = load_students(ACTIVE_PROGRAM)
         
         st.session_state.consecutive_sync_failures = 0
         st.caption(f"🕒 **Data Last Synchronized:** `{last_sync}`")
         
+        # Step B: Render the active page based on session state
         if st.session_state.page == "profile" and st.session_state.selected_student_email:
             render_student_profile(df_all)
         else:
             render_student_list(df_all)
 
+        # Step C: The Footer Call
+        # Placed here so it runs after the main content, regardless of 
+        # whether the user is on the list view or a specific student's profile.
+        render_footer(last_sync)
+
     except Exception as e:
+        # If anything in Step A, B, or C fails, catch and log it gracefully
         st.session_state.consecutive_sync_failures += 1
         error_msg = str(e)
         
