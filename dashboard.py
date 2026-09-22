@@ -653,28 +653,32 @@ def render_student_list(df_all):
         <style>
         /* Card styling for the main metric box */
         div[data-testid="stMetric"] {
-            background-color: #ffffff;
-            border: 1px solid #e6e6f2;
+            /* Uses Streamlit's dynamic theme variables instead of hardcoded white */
+            background-color: var(--background-color);
+            border: 1px solid var(--secondary-background-color);
             border-radius: 8px;
             padding: 15px 20px;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
+            /* This preserves your red top border */
             border-top: 4px solid #c8102e; 
         }
         
         /* Style the Title (e.g. ON-TIME GRAD RATE) */
-        div[data-testid="stMetricLabel"] > div > p {
+        div[data-testid="stMetricLabel"] p {
             text-transform: uppercase !important;
             font-size: 0.75rem !important;
             font-weight: 600 !important;
-            color: #7b809a !important;
+            /* Dynamically adapts to light/dark mode */
+            color: var(--faded-text-color) !important;
             letter-spacing: 0.5px !important;
         }
         
         /* Style the Main Number (e.g. 58.0%) */
-        div[data-testid="stMetricValue"] > div {
+        div[data-testid="stMetricValue"] div {
             font-size: 2rem !important;
             font-weight: 700 !important;
-            color: #344767 !important;
+            /* Dynamically adapts to light/dark mode */
+            color: var(--text-color) !important;
         }
         </style>
         """,
