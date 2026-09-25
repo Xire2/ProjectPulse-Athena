@@ -728,7 +728,7 @@ def render_student_list(df_all):
         df_all["lifecycle_stage"]
         .value_counts()
         .reindex(
-            ["Coursework", "Comprehensive Exam", "Capstone", "Completed"],
+            ["Coursework", "Comprehensive Exam", "Capstone"],
             fill_value=0
         )
     )
@@ -745,62 +745,68 @@ def render_student_list(df_all):
     else:
         stage_df["Percentage"] = 0.0
 
-    st.subheader(
-        "Lifecycle Stage Breakdown",
-        help="Shows the number of enrolled students currently at each lifecycle stage. A student moves to the next stage once the previous stage is completed."
-    )
+    # --------------------------------------------------------------
+    # Display chart on the left side
+    # --------------------------------------------------------------
 
-    fig = px.bar(
-        stage_df,
-        x="Percentage",
-        y="Lifecycle Stage",
-        orientation="h",
-        text="Percentage",
-        custom_data=["Students"],
-        range_x=[0, 100],
-        labels={
-            "Percentage": "Percentage of Enrolled Students",
-            "Lifecycle Stage": ""
-        }
-    )
+    col1, col2 = st.columns(2)
 
-    fig.update_traces(
-        marker_color=["#0072B2", "#FFAE00", "#D50000", "#0DC249"],
-        texttemplate="%{text:.2f}%",
-        textposition="outside",
-        hovertemplate=(
-            "<b>%{y}</b><br>"
-            "Students: %{customdata[0]}"
-            "<extra></extra>"
+    with col1:
+        st.subheader(
+            "Lifecycle Stage Breakdown",
+            help="Shows the number of enrolled students currently at each lifecycle stage."
         )
-    )
 
-    fig.update_layout(
-        height=250,
-        margin=dict(l=10, r=40, t=10, b=10),
-        xaxis=dict(
-            range=[0, 100],
-            ticksuffix="%",
-            dtick=20
-        ),
-        yaxis=dict(
-            categoryorder="array",
-            categoryarray=[
-                "Completed",
-                "Capstone",
-                "Comprehensive Exam",
-                "Coursework"
-            ]
-        ),
-        showlegend=False
-    )
+        fig = px.bar(
+            stage_df,
+            x="Percentage",
+            y="Lifecycle Stage",
+            orientation="h",
+            text="Percentage",
+            custom_data=["Students"],
+            range_x=[0, 100],
+            labels={
+                "Percentage": "Percentage of Enrolled Students",
+                "Lifecycle Stage": ""
+            }
+        )
 
-    st.plotly_chart(
-        fig,
-        use_container_width=True,
-        config={"displayModeBar": False}
-    )
-    
+        fig.update_traces(
+            marker_color=["#0072B2", "#FFAE00", "#D50000"],
+            texttemplate="%{text:.2f}%",
+            textposition="outside",
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                "Students: %{customdata[0]}"
+                "<extra></extra>"
+            )
+        )
+
+        fig.update_layout(
+            height=250,
+            margin=dict(l=10, r=40, t=10, b=10),
+            xaxis=dict(
+                range=[0, 100],
+                ticksuffix="%",
+                dtick=20
+            ),
+            yaxis=dict(
+                categoryorder="array",
+                categoryarray=[
+                    "Capstone",
+                    "Comprehensive Exam",
+                    "Coursework"
+                ]
+            ),
+            showlegend=False
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config={"displayModeBar": False}
+        )
+   
     st.divider()
 
     st.subheader(f"Student Roster & Lifecycle Progress ({ACTIVE_PROGRAM})")
