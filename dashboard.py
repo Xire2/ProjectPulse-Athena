@@ -703,94 +703,93 @@ def render_student_list(df_all):
         delta_color="off",
         help="Percentage of the total cohort that has completed coursework, passed the comprehensive exam, and defended the capstone."
     )
-
     # --------------------------------------------------------------
-# US-20: LIFECYCLE STAGE BREAKDOWN
-# --------------------------------------------------------------
-col1, col2 = st.columns(2)
+    # US-20: LIFECYCLE STAGE BREAKDOWN
+    # --------------------------------------------------------------
+    col1, col2 = st.columns(2)
 
-with col1:
-    st.markdown("#### Lifecycle Stage Breakdown")
+    with col1:
+        st.markdown("#### Lifecycle Stage Breakdown")
 
-    stage_counts = {
-        "Coursework": cw_completed,
-        "Comprehensive Exam": exam_passed,
-        "Capstone": capstone_defended
-    }
-
-    stage_df = pd.DataFrame(
-        list(stage_counts.items()),
-        columns=["Lifecycle Stage", "Students"]
-    )
-
-    if total_students > 0:
-        stage_df["Percentage"] = (
-            stage_df["Students"] / total_students * 100
-        )
-    else:
-        stage_df["Percentage"] = 0.0
-
-    fig = px.bar(
-        stage_df,
-        x="Percentage",
-        y="Lifecycle Stage",
-        orientation="h",
-        text="Percentage",
-        custom_data=["Students"],
-        range_x=[0, 100],
-        labels={
-            "Percentage": "Percentage of Enrolled Students",
-            "Lifecycle Stage": ""
+        stage_counts = {
+            "Coursework": cw_completed,
+            "Comprehensive Exam": exam_passed,
+            "Capstone": capstone_defended
         }
-    )
 
-    fig.update_traces(
-        marker_color=["#0072B2", "#FFAE00", "#D50000"],
-        texttemplate="%{text:.1f}%",
-        textposition="outside",
-        hovertemplate=(
-            "<b>%{y}</b><br>"
-            "Students: %{customdata[0]}<br>"
-            "Percentage: %{x:.1f}%"
-            "<extra></extra>"
+        stage_df = pd.DataFrame(
+            list(stage_counts.items()),
+            columns=["Lifecycle Stage", "Students"]
         )
-    )
 
-    fig.update_layout(
-        height=250,
-        margin=dict(l=10, r=40, t=10, b=10),
-        xaxis=dict(
-            range=[0, 100],
-            ticksuffix="%",
-            dtick=20
-        ),
-        yaxis=dict(
-            categoryorder="array",
-            categoryarray=[
-                "Capstone",
-                "Comprehensive Exam",
-                "Coursework"
-            ]
-        ),
-        showlegend=False
-    )
+        if total_students > 0:
+            stage_df["Percentage"] = (
+                stage_df["Students"] / total_students * 100
+            )
+        else:
+            stage_df["Percentage"] = 0.0
 
-    st.plotly_chart(
-        fig,
-        use_container_width=True,
-        config={"displayModeBar": False}
-    )
+        fig = px.bar(
+            stage_df,
+            x="Percentage",
+            y="Lifecycle Stage",
+            orientation="h",
+            text="Percentage",
+            custom_data=["Students"],
+            range_x=[0, 100],
+            labels={
+                "Percentage": "Percentage of Enrolled Students",
+                "Lifecycle Stage": ""
+            }
+        )
 
-    st.caption(
-        f"Distribution of the {total_students} enrolled students across "
-        f"the three lifecycle stages."
-    )
+        fig.update_traces(
+            marker_color=["#0072B2", "#FFAE00", "#D50000"],
+            texttemplate="%{text:.1f}%",
+            textposition="outside",
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                "Students: %{customdata[0]}<br>"
+                "Percentage: %{x:.1f}%"
+                "<extra></extra>"
+            )
+        )
 
-with col2:
-    st.markdown("#### Completion Rate Trend")
+        fig.update_layout(
+            height=250,
+            margin=dict(l=10, r=40, t=10, b=10),
+            xaxis=dict(
+                range=[0, 100],
+                ticksuffix="%",
+                dtick=20
+            ),
+            yaxis=dict(
+                categoryorder="array",
+                categoryarray=[
+                    "Capstone",
+                    "Comprehensive Exam",
+                    "Coursework"
+                ]
+            ),
+            showlegend=False
+        )
 
-    # Future US-24 line graph goes here.
-    st.info("Completion rate trend will be added here.")
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config={"displayModeBar": False}
+        )
+
+        st.caption(
+            f"Distribution of the {total_students} enrolled students across "
+            f"the three lifecycle stages."
+        )
+
+    with col2:
+        st.markdown("#### Completion Rate Trend")
+
+        # Future US-24 line graph goes here.
+        st.info("Completion rate trend will be added here.")
     
     st.divider()
 
