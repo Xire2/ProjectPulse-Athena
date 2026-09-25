@@ -706,84 +706,100 @@ def render_student_list(df_all):
     # --------------------------------------------------------------
     # US-20: LIFECYCLE STAGE BREAKDOWN
     # --------------------------------------------------------------
-    col1, col2 = st.columns(2)
 
-    with col1:
-        st.markdown("#### Lifecycle Stage Breakdown")
+    def determine_lifecycle_stage(row):
+        if row["coursework_display"] != "Completed":
+            return "Coursework"
 
-        stage_counts = {
-            "Coursework": cw_completed,
-            "Comprehensive Exam": exam_passed,
-            "Capstone": capstone_defended
+        if row["comprehensive_exam_display"] != "Passed":
+            return "Comprehensive Exam"
+
+        if row["capstone_display"] != "Defended for Completion":
+            return "Capstone"
+
+        return "Completed"
+
+    df_all["lifecycle_stage"] = df_all.apply(
+        determine_lifecycle_stage,
+        axis=1
+    )
+
+    stage_counts = (
+        df_all["lifecycle_stage"]
+        .value_counts()
+        .reindex(
+            ["Coursework", "Comprehensive Exam", "Capstone", "Completed"],
+            fill_value=0
+        )
+    )
+
+    stage_df = pd.DataFrame({
+        "Lifecycle Stage": stage_counts.index,
+        "Students": stage_counts.values
+    })
+
+    if total_students > 0:
+        stage_df["Percentage"] = (
+            stage_df["Students"] / total_students * 100
+        )
+    else:
+        stage_df["Percentage"] = 0.0
+
+    st.subheader(
+        "Lifecycle Stage Breakdown",
+        help="Shows the number of enrolled students currently at each lifecycle stage. A student moves to the next stage once the previous stage is completed."
+    )
+
+    fig = px.bar(
+        stage_df,
+        x="Percentage",
+        y="Lifecycle Stage",
+        orientation="h",
+        text="Percentage",
+        custom_data=["Students"],
+        range_x=[0, 100],
+        labels={
+            "Percentage": "Percentage of Enrolled Students",
+            "Lifecycle Stage": ""
         }
+    )
 
-        stage_df = pd.DataFrame(
-            list(stage_counts.items()),
-            columns=["Lifecycle Stage", "Students"]
+    fig.update_traces(
+        marker_color=["#0072B2", "#FFAE00", "#D50000", "#0DC249"],
+        texttemplate="%{text:.2f}%",
+        textposition="outside",
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "Students: %{customdata[0]}"
+            "<extra></extra>"
         )
+    )
 
-        if total_students > 0:
-            stage_df["Percentage"] = (
-                stage_df["Students"] / total_students * 100
-            )
-        else:
-            stage_df["Percentage"] = 0.0
+    fig.update_layout(
+        height=250,
+        margin=dict(l=10, r=40, t=10, b=10),
+        xaxis=dict(
+            range=[0, 100],
+            ticksuffix="%",
+            dtick=20
+        ),
+        yaxis=dict(
+            categoryorder="array",
+            categoryarray=[
+                "Completed",
+                "Capstone",
+                "Comprehensive Exam",
+                "Coursework"
+            ]
+        ),
+        showlegend=False
+    )
 
-        fig = px.bar(
-            stage_df,
-            x="Percentage",
-            y="Lifecycle Stage",
-            orientation="h",
-            text="Percentage",
-            custom_data=["Students"],
-            range_x=[0, 100],
-            labels={
-                "Percentage": "Percentage of Enrolled Students",
-                "Lifecycle Stage": ""
-            }
-        )
-
-        fig.update_traces(
-            marker_color=["#0072B2", "#FFAE00", "#D50000"],
-            texttemplate="%{text:.2f}%",
-            textposition="outside",
-            hovertemplate=(
-                "<b>%{y}</b><br>"
-                "Students: %{customdata[0]}<br>"
-                "Percentage: %{x:.2f}%"
-                "<extra></extra>"
-            )
-        )
-
-        fig.update_layout(
-            height=250,
-            margin=dict(l=10, r=40, t=10, b=10),
-            xaxis=dict(
-                range=[0, 100],
-                ticksuffix="%",
-                dtick=20
-            ),
-            yaxis=dict(
-                categoryorder="array",
-                categoryarray=[
-                    "Capstone",
-                    "Comprehensive Exam",
-                    "Coursework"
-                ]
-            ),
-            showlegend=False
-        )
-
-        st.plotly_chart(
-            fig,
-            use_container_width=True,
-            config={"displayModeBar": False}
-        )
-
-        st.caption(
-            f"Distribution of the {total_students} enrolled students across "
-            f"the three lifecycle stages."
-        )
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        config={"displayModeBar": False}
+    )
     
     st.divider()
 
