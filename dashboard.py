@@ -728,7 +728,7 @@ def render_student_list(df_all):
         df_all["lifecycle_stage"]
         .value_counts()
         .reindex(
-            ["Coursework", "Comprehensive Exam", "Capstone"],
+            ["Coursework", "Comprehensive Exam", "Capstone", "Completed"],
             fill_value=0
         )
     )
@@ -754,7 +754,7 @@ def render_student_list(df_all):
     with col1:
         st.subheader(
             "Lifecycle Stage Breakdown",
-            help="Shows the number of enrolled students currently at each lifecycle stage."
+            help="Shows the number and percentage of enrolled students at each lifecycle stage."
         )
 
         fig = px.bar(
@@ -772,7 +772,12 @@ def render_student_list(df_all):
         )
 
         fig.update_traces(
-            marker_color=["#0072B2", "#FFAE00", "#D50000"],
+            marker_color=[
+                "#0072B2",
+                "#FFAE00",
+                "#D50000",
+                "#0DC249"
+            ],
             texttemplate="%{text:.2f}%",
             textposition="outside",
             hovertemplate=(
@@ -793,6 +798,7 @@ def render_student_list(df_all):
             yaxis=dict(
                 categoryorder="array",
                 categoryarray=[
+                    "Completed",
                     "Capstone",
                     "Comprehensive Exam",
                     "Coursework"
@@ -806,7 +812,7 @@ def render_student_list(df_all):
             use_container_width=True,
             config={"displayModeBar": False}
         )
-   
+        
     st.divider()
 
     st.subheader(f"Student Roster & Lifecycle Progress ({ACTIVE_PROGRAM})")
