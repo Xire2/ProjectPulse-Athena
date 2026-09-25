@@ -693,6 +693,45 @@ else:
         st.session_state.consecutive_sync_failures = 0
         st.caption(f"🕒 **Data Last Synchronized:** `{last_sync}`")
         
+        # -------------------------------------------------------------
+        # GLOBAL TERM FILTER (Sidebar / Global Navigation)
+        # -------------------------------------------------------------
+        # 1. Identify distinct terms sorted newest to oldest
+        if "term" in df_all.columns:
+            term_options = sorted(df_all["term"].dropna().unique().tolist(), reverse=True)
+        else:
+            term_options = []
+
+        if term_options:
+            # Set default to active/current term (e.g., first element or specific active flag)
+            current_term_default = term_options[0]
+
+            if "selected_term" not in st.session_state:
+                st.session_state["selected_term"] = current_term_default
+
+            # Global selector in the sidebar so it's accessible across all views
+            selected_term = st.sidebar.selectbox(
+                "📅 Academic Term / Semester",
+                options=term_options,
+                index=term_options.index(st.session_state["selected_term"])
+                if st.session_state["selected_term"] in term_options
+                else 0,
+                key="global_term_selector",
+            )
+            st.session_state["selected_term"] = selected_term
+
+            # 2. Filter dataset so all views, KPIs, and charts sync consistently
+            df_filtered = df_all[df_all["term"] == selected_term].copy()
+        else:
+            df_filtered = df_all.copy()
+
+        # -------------------------------------------------------------
+        # VIEW ROUTER (Pass df_filtered to ensure synchronization)
+        # -------------------------------------------------------------
+        if st.session_state.page == "profile" and st.session_state.selected_student_email:
+            render_student_profile(df_filtered)
+        else:
+            render_student_list(df_filtered)
         if st.session_state.page == "profile" and st.session_state.selected_student_email:
             render_student_profile(df_all)
         else:
