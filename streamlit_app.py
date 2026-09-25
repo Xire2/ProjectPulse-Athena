@@ -490,6 +490,52 @@ def render_student_list(df_all):
 # VIEW 2: STUDENT PROFILE (Read / Write Record Inspector)
 # ------------------------------------------------------------------
 def render_student_profile(df_all):
+    # Advisor Caseload & Cohort Filter
+    current_advisor = st.session_state.get("advisor_id") or st.session_state.get("user_email")
+    user_role = st.session_state.get("role", "Faculty")
+
+    advisor_col = "advisor_id" if "advisor_id" in df_all.columns else "advisor_email"
+    cohort_col = "cohort" if "cohort" in df_all.columns else "cohort_year"
+
+    has_assignments = (
+        advisor_col in df_all.columns 
+        and current_advisor in df_all[advisor_col].dropna().values
+    )
+
+    f_col1, f_col2 = st.columns([1, 1])
+
+    with f_col1:
+        default_index = 0 if (user_role in ["Faculty", "Advisor"] and has_assignments) else 1
+        caseload_mode = st.radio(
+            "Filter Scope:",
+            options=["My Advisees", "All Students"],
+            index=default_index,
+            horizontal=True,
+            key="advisor_caseload_filter"
+        )
+
+    with f_col2:
+        if cohort_col in df_all.columns:
+            cohort_options = ["All Cohorts"] + sorted(df_all[cohort_col].dropna().unique().tolist())
+            selected_cohort = st.selectbox("Cohort / Year:", options=cohort_options, key="cohort_filter")
+        else:
+            selected_cohort = "All Cohorts"
+
+    if caseload_mode == "My Advisees":
+        if not has_assignments:
+            st.info(
+                "ℹ️ **No Advisees Assigned:** There are currently no students assigned to your profile in the database. "
+                "If you believe this is an error, please reach out to your department administrator."
+            )
+            return
+        df_all = df_all[df_all[advisor_col] == current_advisor]
+
+    if selected_cohort != "All Cohorts" and cohort_col in df_all.columns:
+        df_all = df_all[df_all[cohort_col] == selected_cohort]
+
+    if df_all.empty:
+        st.warning("No students found matching the selected criteria.")
+        return
     st.subheader("Student Profile Inspector")
 
     if st.button("← Back to student list"):
