@@ -703,13 +703,15 @@ def render_student_list(df_all):
         delta_color="off",
         help="Percentage of the total cohort that has completed coursework, passed the comprehensive exam, and defended the capstone."
     )
+
     # --------------------------------------------------------------
-    # US-20: LIFECYCLE STAGE BREAKDOWN
-    # --------------------------------------------------------------
+# US-20: LIFECYCLE STAGE BREAKDOWN
+# --------------------------------------------------------------
+col1, col2 = st.columns(2)
+
+with col1:
     st.markdown("#### Lifecycle Stage Breakdown")
 
-    # Count students currently represented in each lifecycle stage.
-    # These counts are converted to percentages of the total enrolled cohort.
     stage_counts = {
         "Coursework": cw_completed,
         "Comprehensive Exam": exam_passed,
@@ -728,7 +730,6 @@ def render_student_list(df_all):
     else:
         stage_df["Percentage"] = 0.0
 
-    # Horizontal bars with a common 0–100% scale
     fig = px.bar(
         stage_df,
         x="Percentage",
@@ -744,6 +745,7 @@ def render_student_list(df_all):
     )
 
     fig.update_traces(
+        marker_color=["#0072B2", "#FFAE00", "#D50000"],
         texttemplate="%{text:.1f}%",
         textposition="outside",
         hovertemplate=(
@@ -756,7 +758,7 @@ def render_student_list(df_all):
 
     fig.update_layout(
         height=250,
-        margin=dict(l=10, r=50, t=10, b=10),
+        margin=dict(l=10, r=40, t=10, b=10),
         xaxis=dict(
             range=[0, 100],
             ticksuffix="%",
@@ -765,9 +767,9 @@ def render_student_list(df_all):
         yaxis=dict(
             categoryorder="array",
             categoryarray=[
-                "Coursework",
+                "Capstone",
                 "Comprehensive Exam",
-                "Capstone"
+                "Coursework"
             ]
         ),
         showlegend=False
@@ -781,9 +783,14 @@ def render_student_list(df_all):
 
     st.caption(
         f"Distribution of the {total_students} enrolled students across "
-        f"the three lifecycle stages. Percentages collectively represent "
-        f"the full enrolled cohort."
+        f"the three lifecycle stages."
     )
+
+with col2:
+    st.markdown("#### Completion Rate Trend")
+
+    # Future US-24 line graph goes here.
+    st.info("Completion rate trend will be added here.")
     
     st.divider()
 
