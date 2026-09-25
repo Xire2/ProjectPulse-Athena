@@ -631,13 +631,13 @@ def render_student_list(df_all):
     )
     completion_rate = int((fully_completed / total_students * 100)) if total_students > 0 else 0
 
-    # Remaining Students & Lifecycle Breakdown ---
+    #Remaining Students & Lifecycle Breakdown ---
     remaining_students = int(total_students - fully_completed)
     
-    # Sequential lifecycle gaps
+    # Absolute missing counts (independent of other milestones)
     missing_coursework = len(df_all[df_all["coursework_display"] != "Completed"])
-    missing_exam = len(df_all[(df_all["coursework_display"] == "Completed") & (df_all["comprehensive_exam_display"] != "Passed")])
-    missing_capstone = len(df_all[(df_all["coursework_display"] == "Completed") & (df_all["comprehensive_exam_display"] == "Passed") & (df_all["capstone_display"] != "Defended for Completion")])
+    missing_exam = len(df_all[df_all["comprehensive_exam_display"] != "Passed"])
+    missing_capstone = len(df_all[df_all["capstone_display"] != "Defended for Completion"])
 
     # --- ROW 1: Raw Milestone Counts & Refresh Button ---
     top_c1, top_c2, top_c3, top_c4, top_refresh = st.columns([1, 1, 1, 1, 0.8])
@@ -649,7 +649,7 @@ def render_student_list(df_all):
 
     with top_refresh:
         st.write("")
-        if st.button("🔄 Refresh", use_container_width=True):
+        if st.button("🔄 RE-SYNC", use_container_width=True):
             load_students.clear()
             fetch_student_courses.clear()
             fetch_student_milestones.clear()
