@@ -1,5 +1,5 @@
 streamlit
 pandas
-sqlalchemy
+sqlalchemy==2.0.54
 psycopg2-binary
 greenlet==3.5.6
