@@ -609,14 +609,16 @@ def render_student_list(df_all):
     capstone_defended = len(df_all[df_all["capstone_display"] == "Defended for Completion"])
 
     # --- Calculations ---
-    # On-Time Graduation Calculation
+   # On-Time Graduation Calculation
     evaluated_df = df_all[
         df_all["graduate_on_time"].notna() & 
         (df_all["graduate_on_time"].astype(str).str.strip() != "") &
         (~df_all["graduate_on_time"].astype(str).str.lower().isin(["n/a", "none"]))
     ]
-    grad_denominator = len(evaluated_df)
     grad_numerator = len(evaluated_df[evaluated_df["graduate_on_time"].astype(str).str.lower().isin(["yes", "y", "true", "1"])])
+    
+    # Redefine the denominator as the total cohort to prevent the NameError
+    grad_denominator = total_students
     on_time_rate = (grad_numerator / grad_denominator * 100) if grad_denominator > 0 else 0.0
 
     # Overall Completion Calculation
@@ -628,6 +630,14 @@ def render_student_list(df_all):
         ]
     )
     completion_rate = int((fully_completed / total_students * 100)) if total_students > 0 else 0
+
+    # Remaining Students & Lifecycle Breakdown ---
+    remaining_students = int(total_students - fully_completed)
+    
+    # Sequential lifecycle gaps
+    missing_coursework = len(df_all[df_all["coursework_display"] != "Completed"])
+    missing_exam = len(df_all[(df_all["coursework_display"] == "Completed") & (df_all["comprehensive_exam_display"] != "Passed")])
+    missing_capstone = len(df_all[(df_all["coursework_display"] == "Completed") & (df_all["comprehensive_exam_display"] == "Passed") & (df_all["capstone_display"] != "Defended for Completion")])
 
     # --- ROW 1: Raw Milestone Counts & Refresh Button ---
     top_c1, top_c2, top_c3, top_c4, top_refresh = st.columns([1, 1, 1, 1, 0.8])
@@ -687,12 +697,14 @@ def render_student_list(df_all):
 
     bot_c1, bot_c2, spacer = st.columns([1.2, 1.2, 3.4])
     
+    bot_c1, bot_c2, bot_c3, spacer = st.columns([1.2, 1.2, 1.2, 2.2])
+    
     bot_c1.metric(
         label="On-Time Grad Rate", 
         value=f"{on_time_rate:.1f}%", 
-        delta=f"{grad_numerator} of {grad_denominator} evaluated",
+        delta=f"{grad_numerator} of {total_students} total students",
         delta_color="off",
-        help=f"**Calculation Logic:**\n\n*Numerator:* Students flagged as graduating on time ({grad_numerator})\n*Denominator:* Total students with a recorded graduation status ({grad_denominator})\n*Period:* {CURRENT_TERM_LABEL}"
+        help=f"**Calculation Logic:**\n\n*Numerator:* Students flagged as graduating on time ({grad_numerator})\n*Denominator:* Total students in the cohort ({total_students})\n*Period:* {CURRENT_TERM_LABEL}"
     )
 
     bot_c2.metric(
@@ -703,6 +715,15 @@ def render_student_list(df_all):
         help="Percentage of the total cohort that has completed coursework, passed the comprehensive exam, and defended the capstone."
     )
 
+    # --- NEW: Remaining Students Tile & Breakdown ---
+    bot_c3.metric(
+        label="Remaining Students",
+        value=remaining_students,
+        delta="Active in pipeline",
+        delta_color="off",
+        help=f"**Pending Milestones (Sequential):**\n\n* **{missing_coursework}** needing Coursework\n* **{missing_exam}** needing Comp Exam\n* **{missing_capstone}** needing Capstone Defense\n\n*(Total enrolled cohort minus fully completed)*"
+    )
+    
     st.divider()
 
     st.subheader(f"Student Roster & Lifecycle Progress ({ACTIVE_PROGRAM})")
