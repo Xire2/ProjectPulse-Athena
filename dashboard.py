@@ -745,12 +745,12 @@ def render_student_list(df_all):
 
         fig.update_traces(
             marker_color=["#0072B2", "#FFAE00", "#D50000"],
-            texttemplate="%{text:.1f}%",
+            texttemplate="%{text:.2f}%",
             textposition="outside",
             hovertemplate=(
                 "<b>%{y}</b><br>"
                 "Students: %{customdata[0]}<br>"
-                "Percentage: %{x:.1f}%"
+                "Percentage: %{x:.2f}%"
                 "<extra></extra>"
             )
         )
@@ -784,12 +784,6 @@ def render_student_list(df_all):
             f"Distribution of the {total_students} enrolled students across "
             f"the three lifecycle stages."
         )
-
-    with col2:
-        st.markdown("#### Completion Rate Trend")
-
-        # Future US-24 line graph goes here.
-        st.info("Completion rate trend will be added here.")
     
     st.divider()
 
