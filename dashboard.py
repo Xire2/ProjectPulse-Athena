@@ -13,6 +13,7 @@ Features:
 
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 from sqlalchemy import text
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -702,7 +703,88 @@ def render_student_list(df_all):
         delta_color="off",
         help="Percentage of the total cohort that has completed coursework, passed the comprehensive exam, and defended the capstone."
     )
+    # --------------------------------------------------------------
+    # US-20: LIFECYCLE STAGE BREAKDOWN
+    # --------------------------------------------------------------
+    st.markdown("#### Lifecycle Stage Breakdown")
 
+    # Count students currently represented in each lifecycle stage.
+    # These counts are converted to percentages of the total enrolled cohort.
+    stage_counts = {
+        "Coursework": cw_completed,
+        "Comprehensive Exam": exam_passed,
+        "Capstone": capstone_defended
+    }
+
+    stage_df = pd.DataFrame(
+        list(stage_counts.items()),
+        columns=["Lifecycle Stage", "Students"]
+    )
+
+    if total_students > 0:
+        stage_df["Percentage"] = (
+            stage_df["Students"] / total_students * 100
+        )
+    else:
+        stage_df["Percentage"] = 0.0
+
+    # Horizontal bars with a common 0–100% scale
+    fig = px.bar(
+        stage_df,
+        x="Percentage",
+        y="Lifecycle Stage",
+        orientation="h",
+        text="Percentage",
+        custom_data=["Students"],
+        range_x=[0, 100],
+        labels={
+            "Percentage": "Percentage of Enrolled Students",
+            "Lifecycle Stage": ""
+        }
+    )
+
+    fig.update_traces(
+        texttemplate="%{text:.1f}%",
+        textposition="outside",
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "Students: %{customdata[0]}<br>"
+            "Percentage: %{x:.1f}%"
+            "<extra></extra>"
+        )
+    )
+
+    fig.update_layout(
+        height=250,
+        margin=dict(l=10, r=50, t=10, b=10),
+        xaxis=dict(
+            range=[0, 100],
+            ticksuffix="%",
+            dtick=20
+        ),
+        yaxis=dict(
+            categoryorder="array",
+            categoryarray=[
+                "Coursework",
+                "Comprehensive Exam",
+                "Capstone"
+            ]
+        ),
+        showlegend=False
+    )
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        config={"displayModeBar": False}
+    )
+
+    st.caption(
+        f"Distribution of the {total_students} enrolled students across "
+        f"the three lifecycle stages. Percentages collectively represent "
+        f"the full enrolled cohort."
+    )
+    
     st.divider()
 
     st.subheader(f"Student Roster & Lifecycle Progress ({ACTIVE_PROGRAM})")
