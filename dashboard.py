@@ -705,8 +705,9 @@ def render_student_list(df_all):
         delta_color="off",
         help="Percentage of the total cohort that has completed coursework, passed the comprehensive exam, and defended the capstone."
     )
+
     # --------------------------------------------------------------
-    # US-20: LIFECYCLE STAGE BREAKDOWN
+    # US-20 + US-21: LIFECYCLE STAGE BREAKDOWN & DRILL-DOWN
     # --------------------------------------------------------------
 
     def determine_lifecycle_stage(row):
@@ -719,18 +720,22 @@ def render_student_list(df_all):
         if row["capstone_display"] != "Defended for Completion":
             return "Capstone"
 
-        return "Completed"
+        # Fully completed students are not shown as a lifecycle stage.
+        return None
 
     df_all["lifecycle_stage"] = df_all.apply(
         determine_lifecycle_stage,
         axis=1
     )
 
+    # Only active lifecycle stages are included in the chart.
+    lifecycle_df = df_all[df_all["lifecycle_stage"].notna()].copy()
+
     stage_counts = (
-        df_all["lifecycle_stage"]
+        lifecycle_df["lifecycle_stage"]
         .value_counts()
         .reindex(
-            ["Coursework", "Comprehensive Exam", "Capstone", "Completed"],
+            ["Coursework", "Comprehensive Exam", "Capstone"],
             fill_value=0
         )
     )
@@ -754,6 +759,8 @@ def render_student_list(df_all):
     col1, col2 = st.columns(2)
 
     with col1:
+
+        # Use the currently stored drill stage for the title.
         chart_title = "Lifecycle Stage Breakdown"
 
         if st.session_state.drill_stage:
@@ -796,8 +803,7 @@ def render_student_list(df_all):
             marker_color=[
                 "#0072B2",
                 "#FFAE00",
-                "#D50000",
-                "#0DC249"
+                "#D50000"
             ],
             texttemplate="%{text:.2f}%",
             textposition="outside",
@@ -819,7 +825,6 @@ def render_student_list(df_all):
             yaxis=dict(
                 categoryorder="array",
                 categoryarray=[
-                    "Completed",
                     "Capstone",
                     "Comprehensive Exam",
                     "Coursework"
@@ -834,14 +839,30 @@ def render_student_list(df_all):
             config={"displayModeBar": False},
             on_select="rerun",
             selection_mode="points",
-            key="lifecycle_chart"
+            key=f"lifecycle_chart_{st.session_state.chart_key_counter}"
         )
 
-        if chart_event and chart_event.selection and chart_event.selection.get("points"):
-            clicked_stage = chart_event.selection["points"][0].get("y")
+        # ----------------------------------------------------------
+        # Synchronize Plotly selection with drill_stage
+        # ----------------------------------------------------------
 
-            if clicked_stage:
-                st.session_state.drill_stage = clicked_stage
+        if chart_event and chart_event.selection:
+            selected_points = chart_event.selection.get("points", [])
+
+            if selected_points:
+                clicked_stage = selected_points[0].get("y")
+
+                if clicked_stage in [
+                    "Coursework",
+                    "Comprehensive Exam",
+                    "Capstone"
+                ]:
+                    st.session_state.drill_stage = clicked_stage
+
+            else:
+                # Clicking the already-selected bar again clears
+                # the Plotly selection, so clear the roster filter too.
+                st.session_state.drill_stage = None
 
     st.divider()
 
