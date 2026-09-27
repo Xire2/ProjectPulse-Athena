@@ -753,10 +753,23 @@ def render_student_list(df_all):
     col1, col2 = st.columns(2)
 
     with col1:
-        st.subheader(
-            "Lifecycle Stage Breakdown",
-            help="Shows the number and percentage of enrolled students at each lifecycle stage."
-        )
+chart_title = "Lifecycle Stage Breakdown"
+if st.session_state.drill_stage:
+    chart_title += f" — {st.session_state.drill_stage}"
+
+title_col, clear_col = st.columns([5, 1])
+with title_col:
+    st.subheader(
+        chart_title,
+        help="Shows the number and percentage of enrolled students at each lifecycle stage."
+    )
+with clear_col:
+    if st.session_state.drill_stage:
+        if st.button("✕ Clear", key="clear_drill_chart", use_container_width=True):
+            st.session_state.drill_stage = None
+            st.session_state.chart_key_counter += 1
+            st.rerun()
+       
 
         fig = px.bar(
             stage_df,
@@ -824,20 +837,11 @@ def render_student_list(df_all):
                 st.session_state.drill_stage = clicked_stage
         
     st.divider()
-    if st.session_state.drill_stage:
-        bc1, bc2 = st.columns([6, 1])
 
-        with bc1:
-            st.caption(
-                f"📊 Lifecycle Stage Breakdown  ›  **{st.session_state.drill_stage}**"
-            )
-
-        with bc2:
-            if st.button("✕ Clear filter", use_container_width=True):
-                st.session_state.drill_stage = None
-                st.rerun()
-
-    st.subheader(f"Student Roster & Lifecycle Progress ({ACTIVE_PROGRAM})")
+    roster_title = f"Student Roster & Lifecycle Progress ({ACTIVE_PROGRAM})"
+if st.session_state.drill_stage:
+    roster_title += f" — {st.session_state.drill_stage}"
+st.subheader(roster_title)
     search_col, cohort_col, sort_col = st.columns([2, 1, 1])
     with search_col: search_term = st.text_input("Search by name or student ID", placeholder="e.g. Adrian Santos or 2026124837")
     with cohort_col:
