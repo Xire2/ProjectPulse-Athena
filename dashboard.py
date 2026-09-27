@@ -752,7 +752,7 @@ def render_student_list(df_all):
 
     col1, col2 = st.columns(2)
 
-    with col1:
+with col1:
 chart_title = "Lifecycle Stage Breakdown"
 if st.session_state.drill_stage:
     chart_title += f" — {st.session_state.drill_stage}"
