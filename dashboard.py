@@ -293,7 +293,8 @@ if "user_info" not in st.session_state: st.session_state.user_info = None
 if "page" not in st.session_state: st.session_state.page = "list"
 if "selected_student_email" not in st.session_state: st.session_state.selected_student_email = None
 if "table_key_counter" not in st.session_state: st.session_state.table_key_counter = 0
-
+if "drill_stage" not in st.session_state: st.session_state.drill_stage = None
+    
 def go_to_profile(student_email: str):
     st.session_state.selected_student_email = student_email
     st.session_state.page = "profile"
@@ -807,13 +808,34 @@ def render_student_list(df_all):
             showlegend=False
         )
 
-        st.plotly_chart(
+            chart_event = st.plotly_chart(
             fig,
             use_container_width=True,
-            config={"displayModeBar": False}
+            config={"displayModeBar": False},
+            on_select="rerun",
+            selection_mode="points",
+            key="lifecycle_chart"
         )
+
+        if chart_event and chart_event.selection and chart_event.selection.get("points"):
+            clicked_stage = chart_event.selection["points"][0].get("y")
+
+            if clicked_stage:
+                st.session_state.drill_stage = clicked_stage
         
     st.divider()
+    if st.session_state.drill_stage:
+        bc1, bc2 = st.columns([6, 1])
+
+        with bc1:
+            st.caption(
+                f"📊 Lifecycle Stage Breakdown  ›  **{st.session_state.drill_stage}**"
+            )
+
+        with bc2:
+            if st.button("✕ Clear filter", use_container_width=True):
+                st.session_state.drill_stage = None
+                st.rerun()
 
     st.subheader(f"Student Roster & Lifecycle Progress ({ACTIVE_PROGRAM})")
     search_col, cohort_col, sort_col = st.columns([2, 1, 1])
@@ -825,11 +847,21 @@ def render_student_list(df_all):
         sort_option = st.selectbox("Sort by", ["Name", "Student ID", "Overall Status"])
 
     filtered = df_all.copy()
-    if selected_cohort != "All": filtered = filtered[filtered["cohort"].astype(str) == selected_cohort]
+
+    if selected_cohort != "All":
+        filtered = filtered[
+            filtered["cohort"].astype(str) == selected_cohort
+        ]
+
+    if st.session_state.drill_stage:
+        filtered = filtered[
+            filtered["lifecycle_stage"] == st.session_state.drill_stage
+        ]
+
     if search_term:
         term = search_term.strip().lower()
         filtered = filtered[
-            filtered["full_name"].astype(str).str.lower().str.contains(term, na=False) | 
+            filtered["full_name"].astype(str).str.lower().str.contains(term, na=False) |
             filtered["student_number"].astype(str).str.lower().str.contains(term, na=False)
         ]
 
