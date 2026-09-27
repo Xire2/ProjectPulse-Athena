@@ -723,13 +723,17 @@ def render_student_list(df_all):
         # Fully completed students are not shown as a lifecycle stage.
         return None
 
+
     df_all["lifecycle_stage"] = df_all.apply(
         determine_lifecycle_stage,
         axis=1
     )
 
     # Only active lifecycle stages are included in the chart.
-    lifecycle_df = df_all[df_all["lifecycle_stage"].notna()].copy()
+    # Completed students are intentionally excluded.
+    lifecycle_df = df_all[
+        df_all["lifecycle_stage"].notna()
+    ].copy()
 
     stage_counts = (
         lifecycle_df["lifecycle_stage"]
@@ -752,38 +756,21 @@ def render_student_list(df_all):
     else:
         stage_df["Percentage"] = 0.0
 
-    # --------------------------------------------------------------
-    # Display chart on the left side
-    # --------------------------------------------------------------
 
     col1, col2 = st.columns(2)
 
     with col1:
 
-        # Use the currently stored drill stage for the title.
-        chart_title = "Lifecycle Stage Breakdown"
-
-        if st.session_state.drill_stage:
-            chart_title += f" — {st.session_state.drill_stage}"
-
+        # Create placeholders FIRST so the title and Clear button
+        # remain visually above the chart while the chart selection
+        # is processed before they are displayed.
         title_col, clear_col = st.columns([5, 1])
 
         with title_col:
-            st.subheader(
-                chart_title,
-                help="Shows the number and percentage of enrolled students at each lifecycle stage."
-            )
+            title_placeholder = st.empty()
 
         with clear_col:
-            if st.session_state.drill_stage:
-                if st.button(
-                    "✕ Clear",
-                    key="clear_drill_chart",
-                    use_container_width=True
-                ):
-                    st.session_state.drill_stage = None
-                    st.session_state.chart_key_counter += 1
-                    st.rerun()
+            clear_placeholder = st.empty()
 
         fig = px.bar(
             stage_df,
@@ -833,6 +820,10 @@ def render_student_list(df_all):
             showlegend=False
         )
 
+        # ----------------------------------------------------------
+        # Render chart and receive selection event
+        # ----------------------------------------------------------
+
         chart_event = st.plotly_chart(
             fig,
             use_container_width=True,
@@ -843,7 +834,7 @@ def render_student_list(df_all):
         )
 
         # ----------------------------------------------------------
-        # Synchronize Plotly selection with drill_stage
+        # Process chart selection BEFORE rendering title / Clear
         # ----------------------------------------------------------
 
         if chart_event and chart_event.selection:
@@ -860,10 +851,47 @@ def render_student_list(df_all):
                     st.session_state.drill_stage = clicked_stage
 
             else:
-                # Clicking the already-selected bar again clears
-                # the Plotly selection, so clear the roster filter too.
+                # Clicking the selected bar again clears the filter.
                 st.session_state.drill_stage = None
 
+        # ----------------------------------------------------------
+        # Render title AFTER selection has been processed
+        # ----------------------------------------------------------
+
+        chart_title = "Lifecycle Stage Breakdown"
+
+        if st.session_state.drill_stage:
+            chart_title += f" — {st.session_state.drill_stage}"
+
+        title_placeholder.subheader(
+            chart_title,
+            help="Shows the number and percentage of enrolled students at each lifecycle stage."
+        )
+
+        # ----------------------------------------------------------
+        # Render Clear button AFTER selection has been processed
+        # ----------------------------------------------------------
+
+        if st.session_state.drill_stage:
+            if clear_placeholder.button(
+                "✕ Clear",
+                key="clear_drill_chart",
+                use_container_width=True
+            ):
+                st.session_state.drill_stage = None
+                st.session_state.chart_key_counter += 1
+                st.rerun()
+
+
+    # --------------------------------------------------------------
+    # US-21: Apply lifecycle-stage drill-down to roster
+    # --------------------------------------------------------------
+
+    if st.session_state.drill_stage:
+        filtered = filtered[
+            filtered["lifecycle_stage"]
+            == st.session_state.drill_stage
+        ]
     st.divider()
 
     roster_title = f"Student Roster & Lifecycle Progress ({ACTIVE_PROGRAM})"
