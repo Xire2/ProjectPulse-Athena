@@ -293,6 +293,7 @@ if "user_info" not in st.session_state: st.session_state.user_info = None
 if "page" not in st.session_state: st.session_state.page = "list"
 if "selected_student_email" not in st.session_state: st.session_state.selected_student_email = None
 if "table_key_counter" not in st.session_state: st.session_state.table_key_counter = 0
+if "chart_key_counter" not in st.session_state: st.session_state.chart_key_counter = 0
 if "drill_stage" not in st.session_state: st.session_state.drill_stage = None
     
 def go_to_profile(student_email: str):
