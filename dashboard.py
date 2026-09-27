@@ -882,16 +882,6 @@ def render_student_list(df_all):
                 st.session_state.chart_key_counter += 1
                 st.rerun()
 
-
-    # --------------------------------------------------------------
-    # US-21: Apply lifecycle-stage drill-down to roster
-    # --------------------------------------------------------------
-
-    if st.session_state.drill_stage:
-        filtered = filtered[
-            filtered["lifecycle_stage"]
-            == st.session_state.drill_stage
-        ]
     st.divider()
 
     roster_title = f"Student Roster & Lifecycle Progress ({ACTIVE_PROGRAM})"
