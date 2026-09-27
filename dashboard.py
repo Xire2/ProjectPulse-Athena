@@ -808,7 +808,7 @@ def render_student_list(df_all):
             showlegend=False
         )
 
-            chart_event = st.plotly_chart(
+        chart_event = st.plotly_chart(
             fig,
             use_container_width=True,
             config={"displayModeBar": False},
