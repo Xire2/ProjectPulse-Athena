@@ -359,7 +359,7 @@ def render_login_page():
                 else:
                     log_security_event(input_username, "UNAUTHENTICATED", "LOGIN_FAILURE", "Invalid credentials provided.")
                     st.error("Authentication failed: Invalid username or password.")
-            st.caption("Default seeds: `dean_exec`, `chair_mba`, `advisor_faculty`, `admin_sec` (Password: `Password123!`)")
+            st.caption("Default seeds: `dean_exec`, `chair_mba`, `admin_sec` | **Advisers:** `asmith`, `bjones`, `cbrown`, `dprince` (Password: `Password123!`)")
 
 if not st.session_state.authenticated:
     render_login_page()
@@ -803,11 +803,29 @@ def render_student_list(df_all):
         roster_title += f" — {st.session_state.drill_stage}"
     st.subheader(roster_title)
     
-    search_col, cohort_col, sort_col = st.columns([2, 1, 1])
-    with search_col: search_term = st.text_input("Search by name or student ID", placeholder="e.g. Adrian Santos or 2026124837")
+    # Adjust columns to fit the new Adviser filter
+    search_col, cohort_col, adv_col, sort_col = st.columns([2, 1, 1.2, 1])
+    
+    with search_col: 
+        search_term = st.text_input("Search by name or student ID", placeholder="e.g. Adrian Santos or 2026124837")
+        
     with cohort_col:
         valid_cohorts = sorted([str(c) for c in df_all["cohort"].dropna().unique().tolist()])
-        selected_cohort = st.selectbox("Filter by cohort / intake", ["All"] + valid_cohorts)
+        selected_cohort = st.selectbox("Filter by cohort", ["All"] + valid_cohorts)
+        
+    with adv_col:
+        valid_advisers = sorted([str(a) for a in df_all["adviser"].dropna().unique().tolist() if str(a).strip()])
+        current_user = st.session_state.user_info.get("full_name", "")
+        user_role = st.session_state.user_info.get("role", "")
+        
+        # Dynamic UI: Advisors get a personal toggle, Deans/Admins get the full list
+        if "Advisor" in user_role or "Faculty" in user_role:
+            adv_view = st.selectbox("Adviser View", ["My Advisees", "All Students"])
+            selected_adviser = current_user if adv_view == "My Advisees" else "All"
+        else:
+            default_idx = valid_advisers.index(current_user) + 1 if current_user in valid_advisers else 0
+            selected_adviser = st.selectbox("Filter by Adviser", ["All"] + valid_advisers, index=default_idx)
+
     with sort_col:
         sort_option = st.selectbox("Sort by", ["Name", "Student ID", "Overall Status"])
 
@@ -818,7 +836,11 @@ def render_student_list(df_all):
     if selected_cohort != "All":
         filtered = filtered[filtered["cohort"].astype(str) == selected_cohort]
 
-    # 3. Apply Chart Drill-Down Filter
+    # 3. Apply Adviser Filter
+    if selected_adviser != "All":
+        filtered = filtered[filtered["adviser"].astype(str) == selected_adviser]
+
+    # 4. Apply Chart Drill-Down Filter
     if st.session_state.drill_stage == "Coursework":
         filtered = filtered[filtered["coursework_display"] != "Completed"]
     elif st.session_state.drill_stage == "Comprehensive Exam":
@@ -826,7 +848,7 @@ def render_student_list(df_all):
     elif st.session_state.drill_stage == "Capstone":
         filtered = filtered[filtered["capstone_display"] != "Defended for Completion"]
 
-    # 4. Apply Text Search Filter
+    # 5. Apply Text Search Filter
     if search_term:
         term = search_term.strip().lower()
         filtered = filtered[
@@ -834,12 +856,16 @@ def render_student_list(df_all):
             filtered["student_number"].astype(str).str.lower().str.contains(term, na=False)
         ]
 
-    # 5. Apply Sorting
+    # 6. Apply Sorting
     sort_map = {"Name": "full_name", "Student ID": "student_number", "Overall Status": "overall_status"}
     filtered = filtered.sort_values(sort_map[sort_option]).reset_index(drop=True)
 
+    # 7. Intelligent Empty States
     if filtered.empty:
-        st.info(f"No results found for the {ACTIVE_PROGRAM} program. Try a different search term, or verify the database mappings.")
+        if selected_adviser == current_user and not search_term and selected_cohort == "All" and not st.session_state.drill_stage:
+            st.info(f"You currently have no advisees assigned to you in the {ACTIVE_PROGRAM} program.")
+        else:
+            st.info(f"No results found for the {ACTIVE_PROGRAM} program matching your specific filters.")
         return
 
     st.markdown("""
