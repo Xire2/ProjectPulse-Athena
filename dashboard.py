@@ -620,7 +620,7 @@ def render_student_list(df_all):
     capstone_defended = len(df_all[df_all["capstone_display"] == "Defended for Completion"])
 
     # --- Calculations ---
-   # On-Time Graduation Calculation
+    # On-Time Graduation Calculation
     evaluated_df = df_all[
         df_all["graduate_on_time"].notna() & 
         (df_all["graduate_on_time"].astype(str).str.strip() != "") &
@@ -628,7 +628,6 @@ def render_student_list(df_all):
     ]
     grad_numerator = len(evaluated_df[evaluated_df["graduate_on_time"].astype(str).str.lower().isin(["yes", "y", "true", "1"])])
     
-    # Redefine the denominator as the total cohort to prevent the NameError
     grad_denominator = total_students
     on_time_rate = (grad_numerator / grad_denominator * 100) if grad_denominator > 0 else 0.0
 
@@ -642,10 +641,8 @@ def render_student_list(df_all):
     )
     completion_rate = int((fully_completed / total_students * 100)) if total_students > 0 else 0
 
-    #Remaining Students & Lifecycle Breakdown ---
+    # Remaining Students & Absolute Lifecycle Breakdown
     remaining_students = int(total_students - fully_completed)
-    
-    # Absolute missing counts (independent of other milestones)
     missing_coursework = len(df_all[df_all["coursework_display"] != "Completed"])
     missing_exam = len(df_all[df_all["comprehensive_exam_display"] != "Passed"])
     missing_capstone = len(df_all[df_all["capstone_display"] != "Defended for Completion"])
@@ -658,39 +655,30 @@ def render_student_list(df_all):
     top_c3.metric("Comp Exam", exam_passed)
     top_c4.metric("Capstones", capstone_defended)
 
-    st.write("") # Adds a small vertical buffer between the rows
+    st.write("") 
 
-   # --- ROW 2: Executive Percentages in Styled Cards ---
+    # --- ROW 2: Executive Percentages in Styled Cards ---
     st.markdown(
         """
         <style>
-        /* Card styling for the main metric box */
         div[data-testid="stMetric"] {
-            /* Uses Streamlit's dynamic theme variables instead of hardcoded white */
             background-color: var(--background-color);
             border: 1px solid var(--secondary-background-color);
             border-radius: 8px;
             padding: 15px 20px;
             box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
-            /* This preserves your red top border */
             border-top: 4px solid #c8102e; 
         }
-        
-        /* Style the Title (e.g. ON-TIME GRAD RATE) */
         div[data-testid="stMetricLabel"] p {
             text-transform: uppercase !important;
             font-size: 0.75rem !important;
             font-weight: 600 !important;
-            /* Dynamically adapts to light/dark mode */
             color: var(--faded-text-color) !important;
             letter-spacing: 0.5px !important;
         }
-        
-        /* Style the Main Number (e.g. 58.0%) */
         div[data-testid="stMetricValue"] div {
             font-size: 2rem !important;
             font-weight: 700 !important;
-            /* Dynamically adapts to light/dark mode */
             color: var(--text-color) !important;
         }
         </style>
@@ -716,40 +704,31 @@ def render_student_list(df_all):
         help="Percentage of the total cohort that has completed coursework, passed the comprehensive exam, and defended the capstone."
     )
 
-    # --- NEW: Remaining Students Tile & Breakdown ---
     bot_c3.metric(
         label="Remaining Students",
         value=remaining_students,
         delta="Active in pipeline",
         delta_color="off",
-        help=f"**Pending Milestones (Sequential):**\n\n* **{missing_coursework}** needing Coursework\n* **{missing_exam}** needing Comp Exam\n* **{missing_capstone}** needing Capstone Defense\n\n*(Total enrolled cohort minus fully completed)*"
+        help=f"**Pending Milestones (Absolute):**\n\n* **{missing_coursework}** needing Coursework\n* **{missing_exam}** needing Comp Exam\n* **{missing_capstone}** needing Capstone Defense\n\n*(Total enrolled cohort minus fully completed)*"
     )
     
     # --------------------------------------------------------------
-    # US-20 + US-21: LIFECYCLE STAGE BREAKDOWN & DRILL-DOWN
+    # LIFECYCLE STAGE BREAKDOWN CHART & DRILL-DOWN
     # --------------------------------------------------------------
-    
-    # Map the absolute counts (calculated above for the KPI tiles) directly to the chart
+
     stage_df = pd.DataFrame({
         "Lifecycle Stage": ["Coursework", "Comprehensive Exam", "Capstone"],
         "Students": [missing_coursework, missing_exam, missing_capstone]
     })
 
     if total_students > 0:
-        stage_df["Percentage"] = (
-            stage_df["Students"] / total_students * 100
-        )
+        stage_df["Percentage"] = (stage_df["Students"] / total_students * 100)
     else:
         stage_df["Percentage"] = 0.0
-
 
     col1, col2 = st.columns(2)
 
     with col1:
-
-        # Create placeholders FIRST so the title and Clear button
-        # remain visually above the chart while the chart selection
-        # is processed before they are displayed.
         title_col, clear_col = st.columns([5, 1])
 
         with title_col:
@@ -766,49 +745,23 @@ def render_student_list(df_all):
             text="Percentage",
             custom_data=["Students"],
             range_x=[0, 100],
-            labels={
-                "Percentage": "Percentage of Enrolled Students",
-                "Lifecycle Stage": ""
-            }
+            labels={"Percentage": "Percentage of Enrolled Students", "Lifecycle Stage": ""}
         )
 
         fig.update_traces(
-            marker_color=[
-                "#0072B2",
-                "#FFAE00",
-                "#D50000"
-            ],
+            marker_color=["#0072B2", "#FFAE00", "#D50000"],
             texttemplate="%{text:.2f}%",
             textposition="outside",
-            hovertemplate=(
-                "<b>%{y}</b><br>"
-                "Students: %{customdata[0]}"
-                "<extra></extra>"
-            )
+            hovertemplate="<b>%{y}</b><br>Students: %{customdata[0]}<extra></extra>"
         )
 
         fig.update_layout(
             height=250,
             margin=dict(l=10, r=40, t=10, b=10),
-            xaxis=dict(
-                range=[0, 100],
-                ticksuffix="%",
-                dtick=20
-            ),
-            yaxis=dict(
-                categoryorder="array",
-                categoryarray=[
-                    "Capstone",
-                    "Comprehensive Exam",
-                    "Coursework"
-                ]
-            ),
+            xaxis=dict(range=[0, 100], ticksuffix="%", dtick=20),
+            yaxis=dict(categoryorder="array", categoryarray=["Capstone", "Comprehensive Exam", "Coursework"]),
             showlegend=False
         )
-
-        # ----------------------------------------------------------
-        # Render chart and receive selection event
-        # ----------------------------------------------------------
 
         chart_event = st.plotly_chart(
             fig,
@@ -819,67 +772,35 @@ def render_student_list(df_all):
             key=f"lifecycle_chart_{st.session_state.chart_key_counter}"
         )
 
-        # ----------------------------------------------------------
-        # Process chart selection BEFORE rendering title / Clear
-        # ----------------------------------------------------------
-
         if chart_event and chart_event.selection:
             selected_points = chart_event.selection.get("points", [])
-
             if selected_points:
                 clicked_stage = selected_points[0].get("y")
-
-                if clicked_stage in [
-                    "Coursework",
-                    "Comprehensive Exam",
-                    "Capstone"
-                ]:
+                if clicked_stage in ["Coursework", "Comprehensive Exam", "Capstone"]:
                     st.session_state.drill_stage = clicked_stage
-
             else:
-                # Clicking the selected bar again clears the filter.
                 st.session_state.drill_stage = None
 
-        # ----------------------------------------------------------
-        # Render title AFTER selection has been processed
-        # ----------------------------------------------------------
-
         chart_title = "Lifecycle Stage Breakdown"
+        if st.session_state.drill_stage:
+            chart_title += f" — {st.session_state.drill_stage}"
 
-        # Filter table based on absolute missing status
-    if st.session_state.drill_stage == "Coursework":
-        filtered = filtered[filtered["coursework_display"] != "Completed"]
-    elif st.session_state.drill_stage == "Comprehensive Exam":
-        filtered = filtered[filtered["comprehensive_exam_display"] != "Passed"]
-    elif st.session_state.drill_stage == "Capstone":
-        filtered = filtered[filtered["capstone_display"] != "Defended for Completion"]
-
-        title_placeholder.subheader(
-            chart_title,
-            help="Shows the number and percentage of enrolled students at each lifecycle stage."
-        )
-
-        # ----------------------------------------------------------
-        # Render Clear button AFTER selection has been processed
-        # ----------------------------------------------------------
+        title_placeholder.subheader(chart_title, help="Shows absolute number and percentage of students missing each lifecycle milestone.")
 
         if st.session_state.drill_stage:
-            if clear_placeholder.button(
-                "✕ Clear",
-                key="clear_drill_chart",
-                use_container_width=True
-            ):
+            if clear_placeholder.button("✕ Clear", key="clear_drill_chart", use_container_width=True):
                 st.session_state.drill_stage = None
                 st.session_state.chart_key_counter += 1
                 st.rerun()
 
     st.divider()
 
+    # --------------------------------------------------------------
+    # STUDENT ROSTER & FILTERING
+    # --------------------------------------------------------------
     roster_title = f"Student Roster & Lifecycle Progress ({ACTIVE_PROGRAM})"
-
     if st.session_state.drill_stage:
         roster_title += f" — {st.session_state.drill_stage}"
-
     st.subheader(roster_title)
     
     search_col, cohort_col, sort_col = st.columns([2, 1, 1])
@@ -890,13 +811,22 @@ def render_student_list(df_all):
     with sort_col:
         sort_option = st.selectbox("Sort by", ["Name", "Student ID", "Overall Status"])
 
+    # 1. Initialize Baseline
     filtered = df_all.copy()
+
+    # 2. Apply Cohort Filter
     if selected_cohort != "All":
         filtered = filtered[filtered["cohort"].astype(str) == selected_cohort]
 
-    if st.session_state.drill_stage:
-        filtered = filtered[filtered["lifecycle_stage"] == st.session_state.drill_stage]
+    # 3. Apply Chart Drill-Down Filter
+    if st.session_state.drill_stage == "Coursework":
+        filtered = filtered[filtered["coursework_display"] != "Completed"]
+    elif st.session_state.drill_stage == "Comprehensive Exam":
+        filtered = filtered[filtered["comprehensive_exam_display"] != "Passed"]
+    elif st.session_state.drill_stage == "Capstone":
+        filtered = filtered[filtered["capstone_display"] != "Defended for Completion"]
 
+    # 4. Apply Text Search Filter
     if search_term:
         term = search_term.strip().lower()
         filtered = filtered[
@@ -904,18 +834,13 @@ def render_student_list(df_all):
             filtered["student_number"].astype(str).str.lower().str.contains(term, na=False)
         ]
 
+    # 5. Apply Sorting
     sort_map = {"Name": "full_name", "Student ID": "student_number", "Overall Status": "overall_status"}
     filtered = filtered.sort_values(sort_map[sort_option]).reset_index(drop=True)
 
     if filtered.empty:
         st.info(f"No results found for the {ACTIVE_PROGRAM} program. Try a different search term, or verify the database mappings.")
         return
-
-    # NOTE: st.dataframe renders through a canvas-based grid, so it cannot draw real
-    # HTML pill badges (rounded borders, padding) inside cells — only cell-level
-    # color/background styling via a pandas Styler. That's what we apply below to
-    # get a "highlighted" look (bold colored text on a tinted background) while
-    # keeping click-to-navigate selection working.
 
     st.markdown("""
         <style>
@@ -931,7 +856,6 @@ def render_student_list(df_all):
         </style>
     """, unsafe_allow_html=True)
     
-    # 1. Keep names as clean plain text strings
     display_df = filtered[[
         "full_name", "student_number", "cohort", "overall_status",
         "coursework_display", "comprehensive_exam_display", "capstone_display", "adviser"
@@ -941,11 +865,9 @@ def render_student_list(df_all):
         "comprehensive_exam_display": "Comp Exam", "capstone_display": "Capstone", "adviser": "Adviser"
     })
 
-    # 2. Add a helper styler for making the Name column bold
     def style_bold_name(series):
         return ["font-weight: bold;" for _ in series]
 
-    # 3. Apply both the name style and the status highlighters to the styler
     styled_df = (
         display_df.style
         .apply(style_bold_name, subset=["Name"])
@@ -955,8 +877,6 @@ def render_student_list(df_all):
     )
 
     table_key = f"student_table_{st.session_state.table_key_counter}"
-
-# ---> PASTE BLOCK 2 HERE <---
     st.subheader("Program Roster", anchor="student-roster-table")
     
     event = st.dataframe(
@@ -967,7 +887,6 @@ def render_student_list(df_all):
         on_select="rerun",
         selection_mode="single-cell",
         column_config={
-            # Keep Name as a standard TextColumn since styling handles the boldness
             "Name": st.column_config.TextColumn("Student Name", width="medium"),
             "Student ID": st.column_config.TextColumn("Student ID", width="small"),
             "Cohort": st.column_config.TextColumn("Cohort", width="small"),
