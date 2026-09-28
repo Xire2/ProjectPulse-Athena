@@ -13,6 +13,7 @@ Features:
 
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 from sqlalchemy import text
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -292,6 +293,8 @@ if "user_info" not in st.session_state: st.session_state.user_info = None
 if "page" not in st.session_state: st.session_state.page = "list"
 if "selected_student_email" not in st.session_state: st.session_state.selected_student_email = None
 if "table_key_counter" not in st.session_state: st.session_state.table_key_counter = 0
+if "chart_key_counter" not in st.session_state: st.session_state.chart_key_counter = 0
+if "drill_stage" not in st.session_state: st.session_state.drill_stage = None
 
 def go_to_profile(student_email: str):
     st.session_state.selected_student_email = student_email
@@ -416,6 +419,14 @@ if st.sidebar.button("Log Out", use_container_width=True):
 
 st.sidebar.markdown("---")
 
+# --- SIDEBAR CONTROLS ---
+with st.sidebar:
+        st.write("") # Optional spacing
+        if st.button("RE-SYNC", use_container_width=True):
+            load_students.clear()
+            fetch_student_courses.clear()
+            fetch_student_milestones.clear()
+            st.rerun()
 # ------------------------------------------------------------------
 # STYLED BANNER HEADER
 # ------------------------------------------------------------------
@@ -639,23 +650,15 @@ def render_student_list(df_all):
     missing_exam = len(df_all[df_all["comprehensive_exam_display"] != "Passed"])
     missing_capstone = len(df_all[df_all["capstone_display"] != "Defended for Completion"])
 
-    # --- ROW 1: Raw Milestone Counts & Refresh Button ---
-    top_c1, top_c2, top_c3, top_c4, top_refresh = st.columns([1, 1, 1, 1, 0.8])
+    # --- ROW 1: Raw Milestone Counts ---
+    top_c1, top_c2, top_c3, top_c4 = st.columns(4)
     
     top_c1.metric("Total Cohort", total_students)
     top_c2.metric("Coursework", cw_completed)
     top_c3.metric("Comp Exam", exam_passed)
     top_c4.metric("Capstones", capstone_defended)
 
-    with top_refresh:
-        st.write("")
-        if st.button("🔄 RE-SYNC", use_container_width=True):
-            load_students.clear()
-            fetch_student_courses.clear()
-            fetch_student_milestones.clear()
-            st.rerun()
-
-    st.write("") # Vertical buffer
+    st.write("") # Adds a small vertical buffer between the rows
 
    # --- ROW 2: Executive Percentages in Styled Cards ---
     st.markdown(
@@ -695,8 +698,6 @@ def render_student_list(df_all):
         unsafe_allow_html=True
     )
 
-    bot_c1, bot_c2, spacer = st.columns([1.2, 1.2, 3.4])
-    
     bot_c1, bot_c2, bot_c3, spacer = st.columns([1.2, 1.2, 1.2, 2.2])
     
     bot_c1.metric(
@@ -724,9 +725,191 @@ def render_student_list(df_all):
         help=f"**Pending Milestones (Sequential):**\n\n* **{missing_coursework}** needing Coursework\n* **{missing_exam}** needing Comp Exam\n* **{missing_capstone}** needing Capstone Defense\n\n*(Total enrolled cohort minus fully completed)*"
     )
     
+    # --------------------------------------------------------------
+    # US-20 + US-21: LIFECYCLE STAGE BREAKDOWN & DRILL-DOWN
+    # --------------------------------------------------------------
+
+    def determine_lifecycle_stage(row):
+        if row["coursework_display"] != "Completed":
+            return "Coursework"
+
+        if row["comprehensive_exam_display"] != "Passed":
+            return "Comprehensive Exam"
+
+        if row["capstone_display"] != "Defended for Completion":
+            return "Capstone"
+
+        # Fully completed students are not shown as a lifecycle stage.
+        return None
+
+
+    df_all["lifecycle_stage"] = df_all.apply(
+        determine_lifecycle_stage,
+        axis=1
+    )
+
+    # Only active lifecycle stages are included in the chart.
+    # Completed students are intentionally excluded.
+    lifecycle_df = df_all[
+        df_all["lifecycle_stage"].notna()
+    ].copy()
+
+    stage_counts = (
+        lifecycle_df["lifecycle_stage"]
+        .value_counts()
+        .reindex(
+            ["Coursework", "Comprehensive Exam", "Capstone"],
+            fill_value=0
+        )
+    )
+
+    stage_df = pd.DataFrame({
+        "Lifecycle Stage": stage_counts.index,
+        "Students": stage_counts.values
+    })
+
+    if total_students > 0:
+        stage_df["Percentage"] = (
+            stage_df["Students"] / total_students * 100
+        )
+    else:
+        stage_df["Percentage"] = 0.0
+
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        # Create placeholders FIRST so the title and Clear button
+        # remain visually above the chart while the chart selection
+        # is processed before they are displayed.
+        title_col, clear_col = st.columns([5, 1])
+
+        with title_col:
+            title_placeholder = st.empty()
+
+        with clear_col:
+            clear_placeholder = st.empty()
+
+        fig = px.bar(
+            stage_df,
+            x="Percentage",
+            y="Lifecycle Stage",
+            orientation="h",
+            text="Percentage",
+            custom_data=["Students"],
+            range_x=[0, 100],
+            labels={
+                "Percentage": "Percentage of Enrolled Students",
+                "Lifecycle Stage": ""
+            }
+        )
+
+        fig.update_traces(
+            marker_color=[
+                "#0072B2",
+                "#FFAE00",
+                "#D50000"
+            ],
+            texttemplate="%{text:.2f}%",
+            textposition="outside",
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                "Students: %{customdata[0]}"
+                "<extra></extra>"
+            )
+        )
+
+        fig.update_layout(
+            height=250,
+            margin=dict(l=10, r=40, t=10, b=10),
+            xaxis=dict(
+                range=[0, 100],
+                ticksuffix="%",
+                dtick=20
+            ),
+            yaxis=dict(
+                categoryorder="array",
+                categoryarray=[
+                    "Capstone",
+                    "Comprehensive Exam",
+                    "Coursework"
+                ]
+            ),
+            showlegend=False
+        )
+
+        # ----------------------------------------------------------
+        # Render chart and receive selection event
+        # ----------------------------------------------------------
+
+        chart_event = st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config={"displayModeBar": False},
+            on_select="rerun",
+            selection_mode="points",
+            key=f"lifecycle_chart_{st.session_state.chart_key_counter}"
+        )
+
+        # ----------------------------------------------------------
+        # Process chart selection BEFORE rendering title / Clear
+        # ----------------------------------------------------------
+
+        if chart_event and chart_event.selection:
+            selected_points = chart_event.selection.get("points", [])
+
+            if selected_points:
+                clicked_stage = selected_points[0].get("y")
+
+                if clicked_stage in [
+                    "Coursework",
+                    "Comprehensive Exam",
+                    "Capstone"
+                ]:
+                    st.session_state.drill_stage = clicked_stage
+
+            else:
+                # Clicking the selected bar again clears the filter.
+                st.session_state.drill_stage = None
+
+        # ----------------------------------------------------------
+        # Render title AFTER selection has been processed
+        # ----------------------------------------------------------
+
+        chart_title = "Lifecycle Stage Breakdown"
+
+        if st.session_state.drill_stage:
+            chart_title += f" — {st.session_state.drill_stage}"
+
+        title_placeholder.subheader(
+            chart_title,
+            help="Shows the number and percentage of enrolled students at each lifecycle stage."
+        )
+
+        # ----------------------------------------------------------
+        # Render Clear button AFTER selection has been processed
+        # ----------------------------------------------------------
+
+        if st.session_state.drill_stage:
+            if clear_placeholder.button(
+                "✕ Clear",
+                key="clear_drill_chart",
+                use_container_width=True
+            ):
+                st.session_state.drill_stage = None
+                st.session_state.chart_key_counter += 1
+                st.rerun()
+
     st.divider()
 
-    st.subheader(f"Student Roster & Lifecycle Progress ({ACTIVE_PROGRAM})")
+    roster_title = f"Student Roster & Lifecycle Progress ({ACTIVE_PROGRAM})"
+
+    if st.session_state.drill_stage:
+        roster_title += f" — {st.session_state.drill_stage}"
+
+    st.subheader(roster_title)
+    
     search_col, cohort_col, sort_col = st.columns([2, 1, 1])
     with search_col: search_term = st.text_input("Search by name or student ID", placeholder="e.g. Adrian Santos or 2026124837")
     with cohort_col:
@@ -736,7 +919,12 @@ def render_student_list(df_all):
         sort_option = st.selectbox("Sort by", ["Name", "Student ID", "Overall Status"])
 
     filtered = df_all.copy()
-    if selected_cohort != "All": filtered = filtered[filtered["cohort"].astype(str) == selected_cohort]
+    if selected_cohort != "All":
+        filtered = filtered[filtered["cohort"].astype(str) == selected_cohort]
+
+    if st.session_state.drill_stage:
+        filtered = filtered[filtered["lifecycle_stage"] == st.session_state.drill_stage]
+
     if search_term:
         term = search_term.strip().lower()
         filtered = filtered[
