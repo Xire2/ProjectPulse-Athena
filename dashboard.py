@@ -728,44 +728,11 @@ def render_student_list(df_all):
     # --------------------------------------------------------------
     # US-20 + US-21: LIFECYCLE STAGE BREAKDOWN & DRILL-DOWN
     # --------------------------------------------------------------
-
-    def determine_lifecycle_stage(row):
-        if row["coursework_display"] != "Completed":
-            return "Coursework"
-
-        if row["comprehensive_exam_display"] != "Passed":
-            return "Comprehensive Exam"
-
-        if row["capstone_display"] != "Defended for Completion":
-            return "Capstone"
-
-        # Fully completed students are not shown as a lifecycle stage.
-        return None
-
-
-    df_all["lifecycle_stage"] = df_all.apply(
-        determine_lifecycle_stage,
-        axis=1
-    )
-
-    # Only active lifecycle stages are included in the chart.
-    # Completed students are intentionally excluded.
-    lifecycle_df = df_all[
-        df_all["lifecycle_stage"].notna()
-    ].copy()
-
-    stage_counts = (
-        lifecycle_df["lifecycle_stage"]
-        .value_counts()
-        .reindex(
-            ["Coursework", "Comprehensive Exam", "Capstone"],
-            fill_value=0
-        )
-    )
-
+    
+    # Map the absolute counts (calculated above for the KPI tiles) directly to the chart
     stage_df = pd.DataFrame({
-        "Lifecycle Stage": stage_counts.index,
-        "Students": stage_counts.values
+        "Lifecycle Stage": ["Coursework", "Comprehensive Exam", "Capstone"],
+        "Students": [missing_coursework, missing_exam, missing_capstone]
     })
 
     if total_students > 0:
@@ -879,8 +846,13 @@ def render_student_list(df_all):
 
         chart_title = "Lifecycle Stage Breakdown"
 
-        if st.session_state.drill_stage:
-            chart_title += f" — {st.session_state.drill_stage}"
+        # Filter table based on absolute missing status
+    if st.session_state.drill_stage == "Coursework":
+        filtered = filtered[filtered["coursework_display"] != "Completed"]
+    elif st.session_state.drill_stage == "Comprehensive Exam":
+        filtered = filtered[filtered["comprehensive_exam_display"] != "Passed"]
+    elif st.session_state.drill_stage == "Capstone":
+        filtered = filtered[filtered["capstone_display"] != "Defended for Completion"]
 
         title_placeholder.subheader(
             chart_title,
