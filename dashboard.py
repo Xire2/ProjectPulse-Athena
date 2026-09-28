@@ -466,21 +466,35 @@ def render_instance_settings():
     st.subheader("⚙️ Global Instance Settings")
     st.caption("Set the primary context for this dashboard instance. These settings apply globally to all users.")
 
+    # Dynamically fetch all unique programs currently in the database
+    try:
+        # We now query students_normalized and program_code directly
+        prog_df = conn.query("SELECT DISTINCT program_code FROM students_normalized WHERE program_code IS NOT NULL AND program_code != '';", ttl=0)
+        available_programs = sorted(prog_df["program_code"].unique().tolist())
+    except Exception as e:
+        st.error(f"Failed to load program list from database: {e}")
+        available_programs = []
+        
+    # Ensure the current active program is always in the list even if it has no students yet
+    if ACTIVE_PROGRAM not in available_programs:
+        available_programs.append(ACTIVE_PROGRAM)
+
     with st.form("instance_config_form"):
-        new_program = st.text_input("Active Program Code (e.g., MBA, MSCS, BSB)", value=ACTIVE_PROGRAM)
+        default_index = available_programs.index(ACTIVE_PROGRAM) if ACTIVE_PROGRAM in available_programs else 0
+        selected_program = st.selectbox("Active Program Code", options=available_programs, index=default_index)
         new_term = st.text_input("Current Academic Term Label", value=CURRENT_TERM_LABEL)
         
-        st.info("Ensure the 'Active Program Code' exactly matches the code stored in your database's underlying program column.")
+        st.info("The program list is automatically populated based on the enrolled students in your database.")
         
         if st.form_submit_button("Update Global Dashboard Settings", type="primary"):
             try:
                 with conn.session as s:
                     s.execute(
                         text("UPDATE dashboard_config SET active_program = :ap, current_term = :ct WHERE id = 1;"),
-                        {"ap": new_program.strip(), "ct": new_term.strip()}
+                        {"ap": selected_program.strip(), "ct": new_term.strip()}
                     )
                     s.commit()
-                log_security_event(user["username"], user["role"], "INSTANCE_CONFIG_UPDATED", f"Changed program to {new_program} and term to {new_term}.")
+                log_security_event(user["username"], user["role"], "INSTANCE_CONFIG_UPDATED", f"Changed program to {selected_program} and term to {new_term}.")
                 st.success("Global settings updated successfully! The dashboard will now automatically filter to the new program context.")
                 load_dashboard_config.clear()
                 load_students.clear()
