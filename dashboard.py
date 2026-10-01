@@ -118,12 +118,21 @@ def status_badge(label: str) -> str:
     return render_pill(str(label), color_key)
 
 def overall_status(row) -> str:
+    # Use existing overall_status if explicitly provided by the database mapping
     if "overall_status" in row and pd.notna(row["overall_status"]) and str(row["overall_status"]).strip():
         return str(row["overall_status"]).strip()
+    
+    # Strictly evaluate based on coursework_status pillar
     coursework = str(row.get("coursework_status", "")).strip().upper()
-    if coursework == "CANCELLED": return "Cancelled"
-    if row.get("graduate_on_time") not in (None, "", "N/A", float("nan")): return "Graduated"
-    return "Active"
+    
+    if coursework == "PENDING": 
+        return "Active"
+    elif coursework == "COMPLETED": 
+        return "Graduated"
+    elif coursework == "CANCELLED": 
+        return "Cancelled"
+    
+    return "Unknown"
 
 
 # ------------------------------------------------------------------
@@ -466,23 +475,19 @@ def render_instance_settings():
     st.subheader("⚙️ Global Instance Settings")
     st.caption("Set the primary context for this dashboard instance. These settings apply globally to all users.")
 
-    # Dynamically fetch all unique programs currently in the database
     try:
-        # We now query students_normalized and program_code directly
         prog_df = conn.query("SELECT DISTINCT program_code FROM students_normalized WHERE program_code IS NOT NULL AND program_code != '';", ttl=0)
         available_programs = sorted(prog_df["program_code"].unique().tolist())
     except Exception as e:
         st.error(f"Failed to load program list from database: {e}")
         available_programs = []
         
-    # Ensure the current active program is always in the list even if it has no students yet
     if ACTIVE_PROGRAM not in available_programs:
         available_programs.append(ACTIVE_PROGRAM)
 
     with st.form("instance_config_form"):
         default_index = available_programs.index(ACTIVE_PROGRAM) if ACTIVE_PROGRAM in available_programs else 0
         selected_program = st.selectbox("Active Program Code", options=available_programs, index=default_index)
-        new_term = st.text_input("Current Academic Term Label", value=CURRENT_TERM_LABEL)
         
         st.info("The program list is automatically populated based on the enrolled students in your database.")
         
@@ -490,11 +495,11 @@ def render_instance_settings():
             try:
                 with conn.session as s:
                     s.execute(
-                        text("UPDATE dashboard_config SET active_program = :ap, current_term = :ct WHERE id = 1;"),
-                        {"ap": selected_program.strip(), "ct": new_term.strip()}
+                        text("UPDATE dashboard_config SET active_program = :ap WHERE id = 1;"),
+                        {"ap": selected_program.strip()}
                     )
                     s.commit()
-                log_security_event(user["username"], user["role"], "INSTANCE_CONFIG_UPDATED", f"Changed program to {selected_program} and term to {new_term}.")
+                log_security_event(user["username"], user["role"], "INSTANCE_CONFIG_UPDATED", f"Changed program to {selected_program}.")
                 st.success("Global settings updated successfully! The dashboard will now automatically filter to the new program context.")
                 load_dashboard_config.clear()
                 load_students.clear()
@@ -591,8 +596,17 @@ def render_permissions_and_logs():
                     st.error(f"Error updating permissions: {ex}")
 
     with t_logs:
-        st.caption("Live monitoring of authentication events, schema updates, and blocked write attempts.")
+        with t_logs:
+            st.caption("Live monitoring of authentication events, schema updates, and blocked write attempts.")
         logs_df = conn.query("SELECT timestamp, username, role, event_type, details FROM audit_logs ORDER BY timestamp DESC LIMIT 100;", ttl=0)
+        
+        # Convert DB UTC timestamps to Asia/Manila timezone
+        if not logs_df.empty and "timestamp" in logs_df.columns:
+            dt = pd.to_datetime(logs_df["timestamp"], errors="coerce")
+            if dt.dt.tz is None:
+                dt = dt.dt.tz_localize("UTC")
+            logs_df["timestamp"] = dt.dt.tz_convert("Asia/Manila")
+
         st.dataframe(
             logs_df,
             column_config={
@@ -623,53 +637,141 @@ def render_permissions_and_logs():
             st.success("✅ System is healthy. No synchronization errors logged.")
 
 
+def render_completion_trend_chart(df_all, active_program):
+    if df_all.empty:
+        st.info("No data available to display completion trends.")
+        return
+
+    # Calculate completion rate directly from the loaded dataframe
+    df_all['is_completed'] = df_all['coursework_display'] == 'Completed'
+    
+    trend_df = df_all.groupby('cohort').agg(
+        total_students=('coursework_display', 'count'),
+        completed_students=('is_completed', 'sum')
+    ).reset_index()
+    
+    trend_df['completion_rate'] = (trend_df['completed_students'] / trend_df['total_students']) * 100
+    
+    # Sort the Mapúa Term Formats Chronologically (e.g. 1T2425)
+    trend_df['sort_year'] = trend_df['cohort'].astype(str).str.extract(r'T(\d{2})').astype(float)
+    trend_df['sort_term'] = trend_df['cohort'].astype(str).str.extract(r'^(\d)T').astype(float)
+    
+    trend_df = trend_df.dropna(subset=['sort_year', 'sort_term']).sort_values(by=['sort_year', 'sort_term']).tail(4) 
+    
+    if trend_df.empty:
+        st.info("Not enough standard cohort terms (e.g., 1T2425) to form a trend line.")
+        return
+
+    # Render the Chart
+    fig = px.line(
+        trend_df, 
+        x="cohort", 
+        y="completion_rate", 
+        markers=True,
+        labels={"cohort": "Academic Term", "completion_rate": "Completion Rate (%)"}
+    )
+    
+    fig.update_layout(
+        yaxis_title="Completion Rate (%)",
+        xaxis_title="Academic Term",
+        yaxis=dict(range=[-5, 105], fixedrange=True), 
+        xaxis=dict(fixedrange=True), 
+        hovermode="x unified",
+        margin=dict(l=10, r=10, t=30, b=10)
+    )
+    fig.update_traces(line_color="#1E88E5", line_width=3, marker_size=8)
+    
+    # Draw Subheader and Chart
+    st.subheader(f"Completion Trend — Last 4 Terms", help="Shows the percentage of students in each cohort who have successfully completed all core coursework.")
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+
 # ------------------------------------------------------------------
 # VIEW 1: STUDENT ROSTER (Dashboard)
 # ------------------------------------------------------------------
 def render_student_list(df_all):
-    st.markdown(f"#### Executive Summary — {CURRENT_TERM_LABEL}")
-    total_students = len(df_all)
-    cw_completed = len(df_all[df_all["coursework_display"] == "Completed"])
-    exam_passed = len(df_all[df_all["comprehensive_exam_display"] == "Passed"])
-    capstone_defended = len(df_all[df_all["capstone_display"] == "Defended for Completion"])
+    # --- PRE-READ FILTER STATE ---
+    # Because the filter dropdowns are visually located below the summary,
+    # we use Streamlit's session state to read the selected cohort early.
+    active_cohort = st.session_state.get("cohort_filter", "All")
+    
+    # Format "1T2425" into "1T, A.Y. 2024-2025" dynamically
+    if active_cohort == "All":
+        summary_label = "All Cohorts"
+    elif len(active_cohort) == 6 and active_cohort[1] == 'T':
+        term = active_cohort[0]
+        y1 = active_cohort[2:4]
+        y2 = active_cohort[4:6]
+        summary_label = f"{term}T, A.Y. 20{y1}–20{y2}"
+    else:
+        summary_label = active_cohort
 
-    # --- Calculations ---
-    # On-Time Graduation Calculation
-    evaluated_df = df_all[
-        df_all["graduate_on_time"].notna() & 
-        (df_all["graduate_on_time"].astype(str).str.strip() != "") &
-        (~df_all["graduate_on_time"].astype(str).str.lower().isin(["n/a", "none"]))
+    # --------------------------------------------------------------
+    # 1. DYNAMIC EXECUTIVE SUMMARY
+    # --------------------------------------------------------------
+    st.markdown(f"#### Executive Summary — {summary_label}")
+    
+    # Dynamically filter the KPIs so the Executive Summary matches the selection
+    df_summary = df_all.copy()
+    if active_cohort != "All":
+        df_summary = df_summary[df_summary["cohort"].astype(str) == active_cohort]
+
+    total_students = len(df_summary)
+    cw_completed = len(df_summary[df_summary["coursework_display"] == "Completed"])
+    exam_passed = len(df_summary[df_summary["comprehensive_exam_display"] == "Passed"])
+    capstone_defended = len(df_summary[df_summary["capstone_display"] == "Defended for Completion"])
+
+    evaluated_df = df_summary[
+        df_summary["graduate_on_time"].notna() & 
+        (df_summary["graduate_on_time"].astype(str).str.strip() != "") &
+        (~df_summary["graduate_on_time"].astype(str).str.lower().isin(["n/a", "none"]))
     ]
     grad_numerator = len(evaluated_df[evaluated_df["graduate_on_time"].astype(str).str.lower().isin(["yes", "y", "true", "1"])])
     
     grad_denominator = total_students
     on_time_rate = (grad_numerator / grad_denominator * 100) if grad_denominator > 0 else 0.0
 
-    # Overall Completion Calculation
     fully_completed = len(
-        df_all[
-            (df_all["coursework_display"] == "Completed") & 
-            (df_all["comprehensive_exam_display"] == "Passed") & 
-            (df_all["capstone_display"] == "Defended for Completion")
+        df_summary[
+            (df_summary["coursework_display"] == "Completed") & 
+            (df_summary["comprehensive_exam_display"] == "Passed") & 
+            (df_summary["capstone_display"] == "Defended for Completion")
         ]
     )
     completion_rate = int((fully_completed / total_students * 100)) if total_students > 0 else 0
 
-    # Remaining Students & Absolute Lifecycle Breakdown
     remaining_students = int(total_students - fully_completed)
-    missing_coursework = len(df_all[df_all["coursework_display"] != "Completed"])
-    missing_exam = len(df_all[df_all["comprehensive_exam_display"] != "Passed"])
-    missing_capstone = len(df_all[df_all["capstone_display"] != "Defended for Completion"])
+    missing_coursework = len(df_summary[df_summary["coursework_display"] != "Completed"])
+    missing_exam = len(df_summary[df_summary["comprehensive_exam_display"] != "Passed"])
+    missing_capstone = len(df_summary[df_summary["capstone_display"] != "Defended for Completion"])
 
     # --- ROW 1: Raw Milestone Counts ---
     top_c1, top_c2, top_c3, top_c4 = st.columns(4)
     
-    top_c1.metric("Total Cohort", total_students)
-    top_c2.metric("Coursework", cw_completed)
-    top_c3.metric("Comp Exam", exam_passed)
-    top_c4.metric("Capstones", capstone_defended)
+    top_c1.metric(
+        label="Total Students", 
+        value=total_students,
+        help="The total number of enrolled students matching the current filters."
+    )
+    
+    top_c2.metric(
+        label="Coursework", 
+        value=cw_completed,
+        help="Total students who have fully completed all required core coursework."
+    )
+    
+    top_c3.metric(
+        label="Comprehensive Exam", 
+        value=exam_passed,
+        help="Total students who have successfully passed the Comprehensive Examination."
+    )
+    
+    top_c4.metric(
+        label="Capstones", 
+        value=capstone_defended,
+        help="Total students who have successfully defended and finalized their Capstone project."
+    )
 
-    st.write("") 
+    st.write("")
 
     # --- ROW 2: Executive Percentages in Styled Cards ---
     st.markdown(
@@ -700,56 +802,79 @@ def render_student_list(df_all):
         unsafe_allow_html=True
     )
 
-    bot_c1, bot_c2, bot_c3, spacer = st.columns([1.2, 1.2, 1.2, 2.2])
-    
+    # Determine dynamic delta formatting based on the >= 50% threshold
+    grad_delta_str = f"{grad_numerator} of {total_students} total students"
+    if on_time_rate < 50:
+        grad_delta_str = f"- {grad_numerator} of {total_students} total students"
+
+    comp_delta_str = f"{fully_completed} out of {total_students} students"
+    if completion_rate < 50:
+        comp_delta_str = f"- {fully_completed} out of {total_students} students"
+
+    bot_c1, bot_c2, bot_c3 = st.columns(3)
+        
+    # Determine color mode based on the 50% threshold
+    grad_color_mode = "normal" if on_time_rate >= 50 else "inverse"
+    comp_color_mode = "normal" if completion_rate >= 50 else "inverse"
+
     bot_c1.metric(
-        label="On-Time Grad Rate", 
-        value=f"{on_time_rate:.1f}%", 
-        delta=f"{grad_numerator} of {total_students} total students",
-        delta_color="off",
-        help=f"**Calculation Logic:**\n\n*Numerator:* Students flagged as graduating on time ({grad_numerator})\n*Denominator:* Total students in the cohort ({total_students})\n*Period:* {CURRENT_TERM_LABEL}"
-    )
+            label="On-Time Grad Rate", 
+            value=f"{on_time_rate:.1f}%", 
+            delta=f"{grad_numerator} out of {total_students} students",
+            delta_color=grad_color_mode,
+            help=f"**Calculation Logic:**\n\n*Numerator:* Students flagged as graduating on time ({grad_numerator})\n*Denominator:* Total students in the cohort ({total_students})\n*Period:* {summary_label}"
+        )
 
     bot_c2.metric(
-        label="Overall Completion",
-        value=f"{completion_rate}%",
-        delta=f"{fully_completed} out of {total_students} cohort",
-        delta_color="off",
-        help="Percentage of the total cohort that has completed coursework, passed the comprehensive exam, and defended the capstone."
-    )
+            label="Overall Completion",
+            value=f"{completion_rate}%",
+            delta=f"{fully_completed} out of {total_students} students",
+            delta_color=comp_color_mode,
+            help="Percentage of the active cohort that has completed coursework, passed the comprehensive exam, and defended the capstone."
+        )
 
     bot_c3.metric(
-        label="Remaining Students",
-        value=remaining_students,
-        delta="Active in pipeline",
-        delta_color="off",
-        help=f"**Pending Milestones (Absolute):**\n\n* **{missing_coursework}** needing Coursework\n* **{missing_exam}** needing Comp Exam\n* **{missing_capstone}** needing Capstone Defense\n\n*(Total enrolled cohort minus fully completed)*"
-    )
+            label="Remaining Students",
+            value=remaining_students,
+            delta=None,
+            help=f"**Pending Milestones (Absolute):**\n\n* **{missing_coursework}** needing Coursework\n* **{missing_exam}** needing Comprehensive Exam\n* **{missing_capstone}** needing Capstone Defense\n\n*(Total active cohort minus fully completed)*"
+        )
     
     # --------------------------------------------------------------
-    # LIFECYCLE STAGE BREAKDOWN CHART & DRILL-DOWN
+    # 2. CHARTS (Lifecycle & Trend)
     # --------------------------------------------------------------
-
-    stage_df = pd.DataFrame({
-        "Lifecycle Stage": ["Coursework", "Comprehensive Exam", "Capstone"],
-        "Students": [missing_coursework, missing_exam, missing_capstone]
-    })
-
-    if total_students > 0:
-        stage_df["Percentage"] = (stage_df["Students"] / total_students * 100)
-    else:
-        stage_df["Percentage"] = 0.0
-
     col1, col2 = st.columns(2)
 
     with col1:
         title_col, clear_col = st.columns([5, 1])
+        with title_col: title_placeholder = st.empty()
+        with clear_col: clear_placeholder = st.empty()
 
-        with title_col:
-            title_placeholder = st.empty()
+        # Add the toggle directly above the chart
+        chart_view = st.radio(
+            "Lifecycle Metrics View", 
+            ["Accomplished", "Pending"], 
+            horizontal=True, 
+            label_visibility="collapsed"
+        )
 
-        with clear_col:
-            clear_placeholder = st.empty()
+        # Feed the chart data based on the toggle state
+        if chart_view == "Accomplished":
+            stage_counts = [cw_completed, exam_passed, capstone_defended]
+            help_text = "Shows the absolute number and percentage of students who have successfully accomplished each lifecycle milestone."
+        else:
+            stage_counts = [missing_coursework, missing_exam, missing_capstone]
+            help_text = "Shows the absolute number and percentage of students who have not yet completed each lifecycle milestone."
+
+        stage_df = pd.DataFrame({
+            "Lifecycle Stage": ["Coursework", "Comprehensive Exam", "Capstone"],
+            "Students": stage_counts
+        })
+
+        if total_students > 0:
+            stage_df["Percentage"] = (stage_df["Students"] / total_students * 100)
+        else:
+            stage_df["Percentage"] = 0.0
 
         fig = px.bar(
             stage_df,
@@ -759,7 +884,7 @@ def render_student_list(df_all):
             text="Percentage",
             custom_data=["Students"],
             range_x=[0, 100],
-            labels={"Percentage": "Percentage of Enrolled Students", "Lifecycle Stage": ""}
+            labels={"Percentage": f"Percentage of Active Students ({chart_view})", "Lifecycle Stage": ""}
         )
 
         fig.update_traces(
@@ -772,14 +897,14 @@ def render_student_list(df_all):
         fig.update_layout(
             height=250,
             margin=dict(l=10, r=40, t=10, b=10),
-            xaxis=dict(range=[0, 100], ticksuffix="%", dtick=20),
-            yaxis=dict(categoryorder="array", categoryarray=["Capstone", "Comprehensive Exam", "Coursework"]),
+            xaxis=dict(range=[0, 100], ticksuffix="%", dtick=20, fixedrange=True),
+            yaxis=dict(categoryorder="array", categoryarray=["Capstone", "Comprehensive Exam", "Coursework"], fixedrange=True),
             showlegend=False
         )
 
         chart_event = st.plotly_chart(
             fig,
-            use_container_width=True,
+            width="stretch",
             config={"displayModeBar": False},
             on_select="rerun",
             selection_mode="points",
@@ -799,7 +924,7 @@ def render_student_list(df_all):
         if st.session_state.drill_stage:
             chart_title += f" — {st.session_state.drill_stage}"
 
-        title_placeholder.subheader(chart_title, help="Shows absolute number and percentage of students missing each lifecycle milestone.")
+        title_placeholder.subheader(chart_title, help=help_text)
 
         if st.session_state.drill_stage:
             if clear_placeholder.button("✕ Clear", key="clear_drill_chart", use_container_width=True):
@@ -807,17 +932,20 @@ def render_student_list(df_all):
                 st.session_state.chart_key_counter += 1
                 st.rerun()
 
+    with col2:
+        # Pass df_all (unfiltered) so the trend line ALWAYS shows historical multi-term context!
+        render_completion_trend_chart(df_all, ACTIVE_PROGRAM)
+
     st.divider()
 
     # --------------------------------------------------------------
-    # STUDENT ROSTER & FILTERING
+    # 3. STUDENT ROSTER & FILTERING (Widgets stay below charts)
     # --------------------------------------------------------------
     roster_title = f"Student Roster & Lifecycle Progress ({ACTIVE_PROGRAM})"
     if st.session_state.drill_stage:
         roster_title += f" — {st.session_state.drill_stage}"
     st.subheader(roster_title)
     
-    # Adjust columns to fit the new Adviser filter
     search_col, cohort_col, adv_col, sort_col = st.columns([2, 1, 1.2, 1])
     
     with search_col: 
@@ -825,14 +953,14 @@ def render_student_list(df_all):
         
     with cohort_col:
         valid_cohorts = sorted([str(c) for c in df_all["cohort"].dropna().unique().tolist()])
-        selected_cohort = st.selectbox("Filter by cohort", ["All"] + valid_cohorts)
+        # NOTE the key="cohort_filter" here. This is the engine that drives the session state!
+        selected_cohort = st.selectbox("Filter by cohort", ["All"] + valid_cohorts, key="cohort_filter")
         
     with adv_col:
         valid_advisers = sorted([str(a) for a in df_all["adviser"].dropna().unique().tolist() if str(a).strip()])
         current_user = st.session_state.user_info.get("full_name", "")
         user_role = st.session_state.user_info.get("role", "")
         
-        # Dynamic UI: Advisors get a personal toggle, Deans/Admins get the full list
         if "Advisor" in user_role or "Faculty" in user_role:
             adv_view = st.selectbox("Adviser View", ["My Advisees", "All Students"])
             selected_adviser = current_user if adv_view == "My Advisees" else "All"
@@ -843,26 +971,30 @@ def render_student_list(df_all):
     with sort_col:
         sort_option = st.selectbox("Sort by", ["Name", "Student ID", "Overall Status"])
 
-    # 1. Initialize Baseline
-    filtered = df_all.copy()
+    # --- APPLY REMAINING FILTERS TO THE DATAFRAME ---
+    filtered = df_summary.copy() # Start from the already cohort-filtered dataframe!
 
-    # 2. Apply Cohort Filter
-    if selected_cohort != "All":
-        filtered = filtered[filtered["cohort"].astype(str) == selected_cohort]
-
-    # 3. Apply Adviser Filter
     if selected_adviser != "All":
         filtered = filtered[filtered["adviser"].astype(str) == selected_adviser]
 
-    # 4. Apply Chart Drill-Down Filter
     if st.session_state.drill_stage == "Coursework":
-        filtered = filtered[filtered["coursework_display"] != "Completed"]
+        if chart_view == "Accomplished":
+            filtered = filtered[filtered["coursework_display"] == "Completed"]
+        else:
+            filtered = filtered[filtered["coursework_display"] != "Completed"]
+            
     elif st.session_state.drill_stage == "Comprehensive Exam":
-        filtered = filtered[filtered["comprehensive_exam_display"] != "Passed"]
+        if chart_view == "Accomplished":
+            filtered = filtered[filtered["comprehensive_exam_display"] == "Passed"]
+        else:
+            filtered = filtered[filtered["comprehensive_exam_display"] != "Passed"]
+            
     elif st.session_state.drill_stage == "Capstone":
-        filtered = filtered[filtered["capstone_display"] != "Defended for Completion"]
+        if chart_view == "Accomplished":
+            filtered = filtered[filtered["capstone_display"] == "Defended for Completion"]
+        else:
+            filtered = filtered[filtered["capstone_display"] != "Defended for Completion"]
 
-    # 5. Apply Text Search Filter
     if search_term:
         term = search_term.strip().lower()
         filtered = filtered[
@@ -870,11 +1002,12 @@ def render_student_list(df_all):
             filtered["student_number"].astype(str).str.lower().str.contains(term, na=False)
         ]
 
-    # 6. Apply Sorting
     sort_map = {"Name": "full_name", "Student ID": "student_number", "Overall Status": "overall_status"}
     filtered = filtered.sort_values(sort_map[sort_option]).reset_index(drop=True)
 
-    # 7. Intelligent Empty States
+    # --------------------------------------------------------------
+    # 4. STUDENT ROSTER TABLE
+    # --------------------------------------------------------------
     if filtered.empty:
         if selected_adviser == current_user and not search_term and selected_cohort == "All" and not st.session_state.drill_stage:
             st.info(f"You currently have no advisees assigned to you in the {ACTIVE_PROGRAM} program.")
@@ -882,7 +1015,7 @@ def render_student_list(df_all):
             st.info(f"No results found for the {ACTIVE_PROGRAM} program matching your specific filters.")
         return
 
-    st.markdown("""
+    st.markdown('''
         <style>
             [data-testid="stDataFrame"] td[style*="background-color"] {
                 display: inline-flex !important;
@@ -894,7 +1027,7 @@ def render_student_list(df_all):
                 background-clip: padding-box !important;
             }
         </style>
-    """, unsafe_allow_html=True)
+    ''', unsafe_allow_html=True)
     
     display_df = filtered[[
         "full_name", "student_number", "cohort", "overall_status",
@@ -902,7 +1035,7 @@ def render_student_list(df_all):
     ]].rename(columns={
         "full_name": "Name", "student_number": "Student ID", "cohort": "Cohort",
         "overall_status": "Overall Status", "coursework_display": "Coursework",
-        "comprehensive_exam_display": "Comp Exam", "capstone_display": "Capstone", "adviser": "Adviser"
+        "comprehensive_exam_display": "Comprehensive Exam", "capstone_display": "Capstone", "adviser": "Adviser"
     })
 
     def style_bold_name(series):
@@ -912,18 +1045,27 @@ def render_student_list(df_all):
         display_df.style
         .apply(style_bold_name, subset=["Name"])
         .apply(make_status_styler("coursework"), subset=["Coursework"])
-        .apply(make_status_styler("comprehensive_exam"), subset=["Comp Exam"])
+        .apply(make_status_styler("comprehensive_exam"), subset=["Comprehensive Exam"])
         .apply(make_status_styler("capstone"), subset=["Capstone"])
     )
 
+   # --- CSV EXPORT & AUDIT LOGGING ---
+    def log_csv_export():
+        user = st.session_state.user_info
+        log_security_event(
+            user["username"], 
+            user["role"], 
+            "DATA_EXPORT", 
+            f"Exported {len(display_df)} filtered student records to CSV."
+        )
+
     table_key = f"student_table_{st.session_state.table_key_counter}"
-    st.subheader("Program Roster", anchor="student-roster-table")
     
     event = st.dataframe(
         styled_df,
         key=table_key,
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         on_select="rerun",
         selection_mode="single-cell",
         column_config={
@@ -932,7 +1074,7 @@ def render_student_list(df_all):
             "Cohort": st.column_config.TextColumn("Cohort", width="small"),
             "Overall Status": st.column_config.TextColumn("Status", width="small"),
             "Coursework": st.column_config.TextColumn("Coursework", width="small"),
-            "Comp Exam": st.column_config.TextColumn("Comp Exam", width="small"),
+            "Comprehensive Exam": st.column_config.TextColumn("Comprehensive Exam", width="small"),
             "Capstone": st.column_config.TextColumn("Capstone", width="medium"),
             "Adviser": st.column_config.TextColumn("Adviser", width="medium"),
         }
@@ -949,8 +1091,18 @@ def render_student_list(df_all):
             go_to_profile(selected_email)
             st.rerun()
 
-    st.caption("Tip: click on any cell (e.g. Student Name) to inspect the candidate's profile.")
+    # Align the button to the right side BELOW the table
+    col_empty, col_export = st.columns([5, 1])
+    with col_export:
+        st.download_button(
+            label="📥 Export to CSV",
+            data=display_df.to_csv(index=False).encode('utf-8'),
+            file_name=f"{ACTIVE_PROGRAM}_roster_export.csv",
+            mime="text/csv",
+            on_click=log_csv_export
+        )
 
+    st.caption("Tip: click on any cell (e.g. Student Name) to inspect the candidate's profile.")
 
 # ------------------------------------------------------------------
 # VIEW 2: STUDENT PROFILE (Read / Write Record Inspector)
@@ -1009,7 +1161,7 @@ def render_student_profile(df_all):
             st.markdown("**📝 Comprehensive Examination**")
             st.markdown(student["exam_indicator"], unsafe_allow_html=True)
             st.caption(f"Status: {student['comprehensive_exam_display']}")
-            st.caption(f"🕒 Last Updated: `{ce_updated}`") # <--- Added comp exam timestamp
+            st.caption(f"🕒 Last Updated: `{ce_updated}`") # <--- Added comprehensive exam timestamp
             
     with p3:
         with st.container(border=True):
@@ -1069,7 +1221,7 @@ def render_student_profile(df_all):
             c_form1, c_form2 = st.columns(2)
             with c_form1:
                 new_cw = st.selectbox("Coursework Status", cw_opts, index=get_idx(student["coursework_display"], cw_opts))
-                new_ce = st.selectbox("Comp Exam Status", ce_opts, index=get_idx(student["comprehensive_exam_display"], ce_opts))
+                new_ce = st.selectbox("Comprehensive Exam Status", ce_opts, index=get_idx(student["comprehensive_exam_display"], ce_opts))
             with c_form2:
                 new_cap = st.selectbox("Capstone Status", cap_opts, index=get_idx(student["capstone_display"], cap_opts))
                 new_adv = st.selectbox("Primary Adviser", adv_list, index=get_idx(curr_adv, adv_list))
