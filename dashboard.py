@@ -2,13 +2,6 @@
 Project Pulse — Dynamic Program Dashboard
 ==========================================
 Streamlit app for Program Chairs, Faculty/Program Advisors, and the Dean.
-Features:
-- Dynamic Program Context (Multi-tenant ready)
-- Clean cell-click navigation
-- Strict View-Only vs Read/Write permission enforcement
-- Admin panel for User Permission Management & Security Audit Logs
-- Live 'Data Last Synchronized' timestamp
-- Dynamic Schema Mapping (IT/Admin configuration screen)
 """
 
 import streamlit as st
@@ -17,25 +10,27 @@ import plotly.express as px
 from sqlalchemy import text
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import re
+import os
 
-# Generic title (Dynamic titles are set after DB connection)
+# Generic title
 st.set_page_config(page_title="Project Pulse — Program Dashboard", page_icon="🎓", layout="wide")
 
 # ------------------------------------------------------------------
-# ETHICAL VISUALIZATION SPECIFICATION (CIS310 Standards)
+# ETHICAL VISUALIZATION SPECIFICATION & THRESHOLDS
 # ------------------------------------------------------------------
 PALETTE = {
-    "green": {"hex": "#0DC249", "symbol": "🟢", "description": "Passed / Completed / Defended (On Track)"},
-    "yellow": {"hex": "#FFAE00", "symbol": "🟡", "description": "In-Progress / Pending Clearance"},
-    "red": {"hex": "#D50000", "symbol": "🔴", "description": "Cancelled / Incomplete / Action Required"},
-    "blue": {"hex": "#0072B2", "symbol": "🔵", "description": "Active (Ongoing, Not Yet Graduated)"},
-    "gray": {"hex": "#999999", "symbol": "⚪", "description": "Not Started / Not Applicable / Unknown"},
+    "green": {"hex": "#0DC249", "symbol": "🟢"},
+    "yellow": {"hex": "#FFAE00", "symbol": "🟡"},
+    "red": {"hex": "#D50000", "symbol": "🔴"},
+    "blue": {"hex": "#0072B2", "symbol": "🔵"},
+    "gray": {"hex": "#999999", "symbol": "⚪"},
 }
 
 STAGE_THRESHOLDS = {
     "coursework": {"green": ["Completed"], "yellow": ["Pending"], "red": ["Cancelled"]},
     "comprehensive_exam": {"green": ["Passed"], "yellow": ["In-Progress"], "red": ["Incomplete", "Cancelled"]},
-    "capstone": {"green": ["Defended for Completion"], "yellow": ["In-Progress"], "red": ["Incomplete", "Cancelled"]}, 
+    "capstone": {"green": ["Defended"], "yellow": ["In-Progress"], "red": ["Incomplete", "Cancelled"]}, 
 }
 
 COURSEWORK_MAP = {"completed": "Completed", "cancelled": "Cancelled", "pending": "Pending"}
@@ -49,7 +44,7 @@ COMPREHENSIVE_EXAM_MAP = {
 }
 
 CAPSTONE_MAP = {
-    "done": "Defended for Completion", 
+    "done": "Defended", 
     "not yet done": "In-Progress", 
     "not yet taken": "In-Progress", 
     "in current load": "In-Progress", 
@@ -62,9 +57,6 @@ def map_status(raw_value, mapping, default="Unknown"):
     if raw_value is None or pd.isna(raw_value): return default
     return mapping.get(str(raw_value).strip().lower(), default)
 
-# ------------------------------------------------------------------
-# BADGE / PILL RENDERING (replaces emoji-dot indicators)
-# ------------------------------------------------------------------
 def render_pill(label: str, color_key: str) -> str:
     c = PALETTE.get(color_key, PALETTE["gray"])
     hex_color = c["hex"]
@@ -99,7 +91,7 @@ def make_status_styler(stage: str):
 
 def status_badge(label: str) -> str:
     key_map = {
-        "Completed": "green", "Passed": "green", "Defended for Completion": "green",
+        "Completed": "green", "Passed": "green", "Defended": "green",
         "Graduated": "green", "Enrolled": "green",
         "Active": "blue",
         "In-Progress": "yellow", "Pending": "yellow", "Conditionally Enrolled": "yellow",
@@ -117,7 +109,6 @@ def overall_status(row) -> str:
     elif coursework == "CANCELLED": return "Cancelled"
     return "Unknown"
 
-
 # ------------------------------------------------------------------
 # DATABASE & AUDIT LOGGING
 # ------------------------------------------------------------------
@@ -125,7 +116,6 @@ try:
     conn = st.connection("supabase_db", type="sql")
 except Exception as e:
     st.error("🚨 Critical Error: Failed to connect to Supabase. Verify `.streamlit/secrets.toml` credentials.")
-    st.exception(e)
     st.stop()
 
 def log_security_event(user_id: int, event_type: str, details: str):
@@ -139,7 +129,7 @@ def log_security_event(user_id: int, event_type: str, details: str):
                 {"uid": user_id, "event_type": event_type, "details": details}
             )
             s.commit()
-    except Exception as err:
+    except Exception:
         pass
 
 def authenticate_user(username: str, password_attempt: str):
@@ -150,8 +140,7 @@ def authenticate_user(username: str, password_attempt: str):
     """)
     try:
         with conn.session as s:
-            result = s.execute(query, {"u": username.strip(), "p": password_attempt}).mappings().fetchone()
-            return result
+            return s.execute(query, {"u": username.strip(), "p": password_attempt}).mappings().fetchone()
     except Exception as e:
         st.error(f"Authentication query error: {e}")
         return None
@@ -176,32 +165,46 @@ def load_dashboard_config():
 
 ACTIVE_PROGRAM, CURRENT_TERM_LABEL = load_dashboard_config()
 
-
 # ------------------------------------------------------------------
 # DATA LOADERS (DYNAMICALLY MAPPED & FILTERED BY PROGRAM)
 # ------------------------------------------------------------------
+def get_cohort_val(c):
+    m = re.search(r'(\d)[TQ](\d{2})(\d{2})', str(c).upper())
+    return float(f"{m.group(2)}{m.group(3)}.{m.group(1)}") if m else 0.0
+
 @st.cache_data(ttl=60, show_spinner="Loading mapped student roster...")
 def load_students(target_program: str) -> tuple[pd.DataFrame, str]:
+    # 1. Fetch Program-Specific Thresholds
+    try:
+        t_query = text("""
+            SELECT cw_days, ce_days, cap_days 
+            FROM program_thresholds pt
+            JOIN program p ON pt.program_id = p.program_id
+            WHERE p.program_code = :prog
+        """)
+        with conn.session as s:
+            t_res = s.execute(t_query, {"prog": target_program}).fetchone()
+        cw_thresh = t_res[0] if t_res else 730
+        ce_thresh = t_res[1] if t_res else 180
+        cap_thresh = t_res[2] if t_res else 365
+    except Exception:
+        cw_thresh, ce_thresh, cap_thresh = 730, 180, 365
+
+    # 2. Fetch Core Data
     try:
         query = """
             SELECT 
-                s.student_number,
-                s.student_email,
-                s.first_name,
-                s.last_name,
-                s.adviser_id,
-                a.full_name AS adviser,
-                s.graduate_on_time,
-                s.graduate_date_term_sy,
-                s.remarks,
-                s.created_at,
-                c.cohort_code AS cohort,
-                p.program_code AS program,
-                p.program_name AS program_name,
+                s.student_number, s.student_email, s.first_name, s.last_name, 
+                a.full_name AS adviser, s.graduate_on_time, s.graduate_date_term_sy, 
+                s.remarks, s.created_at, c.cohort_code AS cohort, 
+                p.program_code AS program, p.program_name AS program_name,
                 MAX(CASE WHEN stg.stage_name = 'coursework' THEN sts.status_name END) AS coursework_status,
                 MAX(CASE WHEN stg.stage_name = 'comprehensive_exam' THEN sts.status_name END) AS comprehensive_exam,
                 MAX(CASE WHEN stg.stage_name = 'capstone' THEN sts.status_name END) AS capstone,
-                MAX(CASE WHEN stg.stage_name = 'coursework' THEN sls.last_updated_date END) AS updated_at
+                MAX(CASE WHEN stg.stage_name = 'coursework' THEN sls.last_updated_date END) AS updated_at,
+                MAX(CASE WHEN stg.stage_name = 'coursework' THEN sls.last_updated_date END) AS cw_updated_at,
+                MAX(CASE WHEN stg.stage_name = 'comprehensive_exam' THEN sls.last_updated_date END) AS ce_updated_at,
+                MAX(CASE WHEN stg.stage_name = 'capstone' THEN sls.last_updated_date END) AS cap_updated_at
             FROM students_normalized s
             LEFT JOIN cohort c ON s.cohort_id = c.cohort_id
             LEFT JOIN program p ON s.program_id = p.program_id
@@ -211,7 +214,7 @@ def load_students(target_program: str) -> tuple[pd.DataFrame, str]:
             LEFT JOIN lifecycle_status sts ON sls.status_id = sts.status_id
             GROUP BY 
                 s.student_number, s.student_email, s.first_name, s.last_name, 
-                s.adviser_id, a.full_name, s.graduate_on_time, s.graduate_date_term_sy, 
+                a.full_name, s.graduate_on_time, s.graduate_date_term_sy, 
                 s.remarks, s.created_at, c.cohort_code, p.program_code, p.program_name;
         """
         df = conn.query(query, ttl=0)
@@ -222,7 +225,8 @@ def load_students(target_program: str) -> tuple[pd.DataFrame, str]:
         mapping_df = conn.query("SELECT dashboard_field, db_column FROM field_mappings;")
         db_to_app_map = dict(zip(mapping_df["db_column"], mapping_df["dashboard_field"]))
         df = df.rename(columns=db_to_app_map)
-    except Exception as e:
+        df = df.loc[:, ~df.columns.duplicated()]
+    except Exception:
         st.sidebar.warning("Schema mapping table missing or misconfigured.")
 
     expected_cols = [
@@ -233,17 +237,6 @@ def load_students(target_program: str) -> tuple[pd.DataFrame, str]:
     for col in expected_cols:
         if col not in df.columns: df[col] = None
 
-    def to_manila_time(series):
-        dt = pd.to_datetime(series, errors="coerce")
-        if dt.dt.tz is None:
-            dt = dt.dt.tz_localize("UTC")
-        return dt.dt.tz_convert("Asia/Manila").dt.strftime("%B %d, %Y at %I:%M %p")
-
-    if "updated_at" in df.columns and df["updated_at"].notna().any():
-        df["coursework_updated_at"] = to_manila_time(df["updated_at"]).fillna("N/A")
-    else:
-        df["coursework_updated_at"] = "N/A"
-        
     if target_program != "UNCONFIGURED PROGRAM" and df["program"].notna().any():
         df = df[df["program"].astype(str).str.strip().str.upper() == target_program.strip().upper()]
 
@@ -258,6 +251,39 @@ def load_students(target_program: str) -> tuple[pd.DataFrame, str]:
     df["coursework_display"] = df["coursework_status"].apply(lambda v: map_status(v, COURSEWORK_MAP))
     df["comprehensive_exam_display"] = df["comprehensive_exam"].apply(lambda v: map_status(v, COMPREHENSIVE_EXAM_MAP))
     df["capstone_display"] = df["capstone"].apply(lambda v: map_status(v, CAPSTONE_MAP))
+
+    # 3. Calculate "At Risk" Flags
+    now_utc = pd.Timestamp.utcnow()
+    def calculate_risk(row):
+        reasons = []
+        if row.get('coursework_display') == 'Pending' and pd.notna(row.get('cw_updated_at')):
+            days = (now_utc - pd.to_datetime(row['cw_updated_at'], utc=True)).days
+            if days > cw_thresh: reasons.append(f"Coursework pending for {days} days (Limit: {cw_thresh})")
+            
+        if row.get('comprehensive_exam_display') == 'In-Progress' and pd.notna(row.get('ce_updated_at')):
+            days = (now_utc - pd.to_datetime(row['ce_updated_at'], utc=True)).days
+            if days > ce_thresh: reasons.append(f"Exam in-progress for {days} days (Limit: {ce_thresh})")
+            
+        if row.get('capstone_display') == 'In-Progress' and pd.notna(row.get('cap_updated_at')):
+            days = (now_utc - pd.to_datetime(row['cap_updated_at'], utc=True)).days
+            if days > cap_thresh: reasons.append(f"Capstone in-progress for {days} days (Limit: {cap_thresh})")
+            
+        return " | ".join(reasons) if reasons else ""
+
+    df['risk_details'] = df.apply(calculate_risk, axis=1)
+    df['is_at_risk'] = df['risk_details'] != ""
+    df['risk_flag'] = df['is_at_risk'].apply(lambda x: "Flagged" if x else "On Track")
+
+    # Time parsing
+    def to_manila_time(series):
+        dt = pd.to_datetime(series, errors="coerce")
+        if dt.dt.tz is None: dt = dt.dt.tz_localize("UTC")
+        return dt.dt.tz_convert("Asia/Manila").dt.strftime("%B %d, %Y at %I:%M %p")
+
+    if "updated_at" in df.columns and df["updated_at"].notna().any():
+        df["coursework_updated_at"] = to_manila_time(df["updated_at"]).fillna("N/A")
+    else:
+        df["coursework_updated_at"] = "N/A"
 
     df["coursework_indicator"] = df["coursework_display"].apply(lambda v: get_stage_badge("coursework", v))
     df["exam_indicator"] = df["comprehensive_exam_display"].apply(lambda v: get_stage_badge("comprehensive_exam", v))
@@ -300,13 +326,12 @@ def fetch_student_milestones(student_number: int) -> pd.DataFrame:
         df = conn.query(query, ttl=0)
         if not df.empty and "Last Updated" in df.columns and df["Last Updated"].notna().any():
             dt = pd.to_datetime(df["Last Updated"], errors="coerce")
-            if dt.dt.tz is None:
-                dt = dt.dt.tz_localize("UTC")
+            if dt.dt.tz is None: dt = dt.dt.tz_localize("UTC")
             df["Last Updated"] = dt.dt.tz_convert("Asia/Manila").dt.strftime("%B %d, %Y at %I:%M %p")
         return df
     except Exception: 
         return pd.DataFrame()
-    
+
 # ------------------------------------------------------------------
 # SESSION STATE MANAGEMENT
 # ------------------------------------------------------------------
@@ -318,11 +343,14 @@ if "table_key_counter" not in st.session_state: st.session_state.table_key_count
 if "chart_key_counter" not in st.session_state: st.session_state.chart_key_counter = 0
 if "drill_stage" not in st.session_state: st.session_state.drill_stage = None
 
-def go_to_profile(student_email: str):
-    st.session_state.selected_student_email = student_email
+def go_to_profile(student_email=None):
+    if student_email:
+        st.session_state.selected_student_email = student_email
+    st.session_state.admin_view = "Student Profile Inspector"
     st.session_state.page = "profile"
 
 def go_to_list():
+    st.session_state.admin_view = "Student Roster"
     st.session_state.page = "list"
     st.session_state.selected_student_email = None
     st.session_state.table_key_counter += 1
@@ -334,27 +362,14 @@ def render_login_page():
     st.markdown(
         """
         <style>
-        .stButton > button[kind="primary"] {
-            background-color: #b92b27 !important;
-            border-color: #b92b27 !important;
-            color: white !important;
-        }
-        .stButton > button[kind="primary"] p, 
-        .stButton > button[kind="primary"] span {
-            color: white !important;
-        }
-        .stButton > button[kind="primary"]:hover {
-            background-color: #FF4B4B !important;
-            border-color: #FF4B4B !important;
-            color: white !important;
-        }
+        .stButton > button[kind="primary"] { background-color: #b92b27 !important; border-color: #b92b27 !important; color: white !important; }
+        .stButton > button[kind="primary"] p, .stButton > button[kind="primary"] span { color: white !important; }
+        .stButton > button[kind="primary"]:hover { background-color: #FF4B4B !important; border-color: #FF4B4B !important; color: white !important; }
         </style>
-        """,
-        unsafe_allow_html=True,
+        """, unsafe_allow_html=True
     )
     logo_left, logo_center, logo_right = st.columns([2, 1, 2])
-    with logo_center:
-        st.image("rectangle_logo.png", width=500)
+    with logo_center: st.image("rectangle_logo.png", width=500)
     st.markdown("<p style='text-align: center; color: gray;'>Project Pulse Student Management Portal</p>", unsafe_allow_html=True)
     st.divider()
 
@@ -380,7 +395,7 @@ def render_login_page():
                 else:
                     log_security_event(None, "LOGIN_FAILURE", "Invalid credentials provided.")
                     st.error("Authentication failed: Invalid username or password.")
-            st.caption("Default seeds: `dean_exec`, `chair_mba`, `admin_sec` | **Advisers:** `asmith`, `bjones`, `cbrown`, `dprince` (Password: `Password123!`)")
+            st.caption("Default seeds: `dean_exec`, `chair_mba`, `admin_sec` | **Advisers:** `asmith`, `bjones`, `cbrown`, `dprince`")
 
 if not st.session_state.authenticated:
     render_login_page()
@@ -390,86 +405,162 @@ if not st.session_state.authenticated:
 # AUTHENTICATED USER HEADER & NAVIGATION
 # ------------------------------------------------------------------
 user = st.session_state.user_info
-st.sidebar.image("square_logo.png", use_container_width=True)
+
+# Use columns [1, 2, 1] to make the center column exactly 50% width
+logo_left, logo_center, logo_right = st.sidebar.columns([1, 6, 1])
+with logo_center:
+    st.image("square_logo.png", use_container_width=True)
+
 st.sidebar.title(f"👤 {user['full_name']}")
 st.sidebar.caption(f"Role: **{user['role']}** | Permissions: **{'Read/Write' if user.get('can_edit', False) else 'View-Only'}**")
 
+if "admin_view" not in st.session_state: 
+    st.session_state.admin_view = "Executive Dashboard"
+
+# 1. Define core app navigation options vs admin configuration options
+core_nav_options = ["Executive Dashboard", "Student Roster", "Student Profile Inspector"]
+admin_nav_options = ["Global Instance Settings", "Schema Mapping Config", "Permissions & Audit Logs"]
+
+# Ensure current view is valid
+all_valid_options = core_nav_options + (admin_nav_options if user["role"] == "IT/Admin" else [])
+if st.session_state.admin_view not in all_valid_options: 
+    st.session_state.admin_view = "Executive Dashboard"
+
+# 2. Render Admin Functions inside an Expandable Dropdown using custom buttons (Only for IT/Admin role)
 if user["role"] == "IT/Admin":
-    if "admin_view" not in st.session_state: st.session_state.admin_view = "Dashboard"
-    selected_admin_view = st.sidebar.radio(
-        "IT Admin Settings", 
-        ["Dashboard", "Global Instance Settings", "Schema Mapping Config", "Permissions & Audit Logs"]
-    )
-    st.session_state.admin_view = selected_admin_view
-else:
-    st.session_state.admin_view = "Dashboard"
+    is_currently_admin = st.session_state.admin_view in admin_nav_options
+    
+    with st.sidebar.expander("⚙️ Admin Configuration", expanded=is_currently_admin):
+        admin_nav_config = {
+            "Global Instance Settings": "GLOBAL INSTANCE SETTINGS",
+            "Schema Mapping Config": "SCHEMA MAPPING CONFIG",
+            "Permissions & Audit Logs": "PERMISSIONS & AUDIT LOGS"
+        }
+        
+        for opt in admin_nav_options:
+            label = admin_nav_config.get(opt, opt.upper())
+            is_active = (st.session_state.admin_view == opt)
+            display_label = f"{label}  •" if is_active else label
+            
+            if st.button(display_label, key=f"admin_btn_{opt.lower().replace(' ', '_')}", use_container_width=True):
+                if st.session_state.admin_view != opt:
+                    st.session_state.admin_view = opt
+                    st.rerun()
+            
+
+# Inject custom CSS for modern dark sidebar & fixed expander header colors
+st.sidebar.markdown("""
+<style>
+/* Rich modern obsidian/charcoal sidebar background */
+section[data-testid="stSidebar"] {
+    background-color: #111318 !important;
+    color: #f8fafc !important;
+}
+
+/* Ensure all sidebar text elements remain crisp white */
+section[data-testid="stSidebar"] p, 
+section[data-testid="stSidebar"] span, 
+section[data-testid="stSidebar"] label, 
+section[data-testid="stSidebar"] h3 {
+    color: #f8fafc !important;
+}
+
+/* Fix Streamlit Expander Header (Admin Configuration) for all states */
+section[data-testid="stSidebar"] [data-testid="stExpander"] {
+    background-color: #1a1f2c !important;
+    border: 1px solid #2d3748 !important;
+    border-radius: 8px !important;
+}
+
+section[data-testid="stSidebar"] [data-testid="stExpander"] summary {
+    background-color: #1a1f2c !important;
+    color: #f8fafc !important;
+    border-radius: 8px !important;
+}
+
+section[data-testid="stSidebar"] [data-testid="stExpander"] summary:hover {
+    background-color: #252b3b !important;
+    color: #ffffff !important;
+}
+
+section[data-testid="stSidebar"] [data-testid="stExpander"] summary span {
+    color: #f8fafc !important;
+}
+
+/* Professional Navigation & Footer Buttons */
+section[data-testid="stSidebar"] .stButton button {
+    border-radius: 8px !important;
+    border: 1px solid #2d3748 !important;
+    background-color: #1a1f2c !important;
+    color: #f8fafc !important;
+    text-align: left !important;
+    font-weight: 600 !important;
+    font-size: 0.85rem !important;
+    padding: 0.7rem 1rem !important;
+    margin-bottom: 0.35rem !important;
+    width: 100% !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3) !important;
+    transition: all 0.2s ease-in-out !important;
+}
+
+/* Vibrant Red Hover and Active States */
+section[data-testid="stSidebar"] .stButton button:hover {
+    background-color: #dc2626 !important;
+    color: #ffffff !important;
+    border-color: #ef4444 !important;
+    transform: translateX(2px);
+}
+</style>
+""", unsafe_allow_html=True)
+
+# 3. Render Core Navigation as Clean Text Buttons (No Emojis, Bold Style)
+nav_config = {
+    "Executive Dashboard": "EXECUTIVE DASHBOARD",
+    "Student Roster": "STUDENT ROSTER",
+    "Student Profile Inspector": "STUDENT PROFILE"
+}
+
+for opt in core_nav_options:
+    label = nav_config.get(opt, opt.upper())
+    
+    is_active = (st.session_state.admin_view == opt)
+    # Add a subtle indicator dot for the active page
+    display_label = f"{label}  •" if is_active else label
+    
+    if st.sidebar.button(display_label, key=f"nav_btn_{opt.lower().replace(' ', '_')}", use_container_width=True):
+        if st.session_state.admin_view != opt:
+            st.session_state.admin_view = opt
+            st.rerun()
 
 st.markdown(
     """
     <style>
-    section[data-testid="stSidebar"] button {
-        background-color: #b92b27 !important;
-        color: white !important;
-        border-color: #b92b27 !important;
-    }
-    section[data-testid="stSidebar"] button p, 
-    section[data-testid="stSidebar"] button span {
-        color: white !important;
-    }
-    section[data-testid="stSidebar"] button:hover {
-        background-color: #FF4B4B !important;
-        color: white !important;
-        border-color: #FF4B4B !important;
-    }
+    section[data-testid="stSidebar"] button { background-color: #b92b27 !important; color: white !important; border-color: #b92b27 !important; }
+    section[data-testid="stSidebar"] button p, section[data-testid="stSidebar"] button span { color: white !important; }
+    section[data-testid="stSidebar"] button:hover { background-color: #FF4B4B !important; color: white !important; border-color: #FF4B4B !important; }
     </style>
-    """,
-    unsafe_allow_html=True,
+    """, unsafe_allow_html=True
 )
 
-if st.sidebar.button("Log Out", use_container_width=True):
-  st.session_state.authenticated = False
-  st.session_state.user_info = None
-  st.session_state.selected_student_email = None
-  st.session_state.page = "list"
-  st.rerun()
-
+# --- SIDEBAR FOOTER: Re-sync & Log Out ---
 st.sidebar.markdown("---")
-with st.sidebar:
-        st.write("") 
-        if st.button("RE-SYNC", use_container_width=True):
-            load_students.clear()
-            fetch_student_courses.clear()
-            fetch_student_milestones.clear()
-            st.rerun()
+
+if st.sidebar.button("RE-SYNC", use_container_width=True, key="footer_resync"):
+    st.cache_data.clear()
+    st.success("Data re-synced successfully!")
+    st.rerun()
+
+if st.sidebar.button("LOG OUT", use_container_width=True, key="footer_logout"):
+    st.session_state.clear()
+    st.rerun()
 
 # ------------------------------------------------------------------
 # STYLED BANNER HEADER
 # ------------------------------------------------------------------
 st.markdown(f"""
-    <div style="
-        background-color: #b92b27; 
-        padding: 20px 25px; 
-        border-radius: 8px; 
-        color: white; 
-        margin-bottom: 20px;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    ">
-        <div style="
-            font-size: 11px; 
-            letter-spacing: 1.2px; 
-            font-weight: 600; 
-            margin-bottom: 6px; 
-            opacity: 0.85;
-        ">
-            MAPÚA UNIVERSITY · ASU PATHWAYS · ETYSB
-        </div>
-        <div style="
-            font-size: 24px; 
-            font-weight: 700; 
-            line-height: 1.3;
-        ">
-            Success Advisor Dashboard — {ACTIVE_PROGRAM} Program
-        </div>
+    <div style="background-color: #b92b27; padding: 20px 25px; border-radius: 8px; color: white; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+        <div style="font-size: 11px; letter-spacing: 1.2px; font-weight: 600; margin-bottom: 6px; opacity: 0.85;">MAPÚA UNIVERSITY · ASU PATHWAYS · ETYSB</div>
+        <div style="font-size: 24px; font-weight: 700; line-height: 1.3;">Success Advisor Dashboard — {ACTIVE_PROGRAM} Program</div>
     </div>
 """, unsafe_allow_html=True)
 
@@ -484,7 +575,6 @@ def render_instance_settings():
         prog_df = conn.query("SELECT DISTINCT program_code FROM program WHERE program_code IS NOT NULL AND program_code != '';", ttl=0)
         available_programs = sorted(prog_df["program_code"].unique().tolist())
     except Exception as e:
-        st.error(f"Failed to load program list from database: {e}")
         available_programs = []
         
     if ACTIVE_PROGRAM not in available_programs:
@@ -515,6 +605,47 @@ def render_instance_settings():
                 st.rerun()
             except Exception as e:
                 st.error(f"Error updating configuration: {e}")
+                
+    st.divider()
+    
+    st.subheader("⏱️ Program Lifecycle Thresholds")
+    st.caption(f"Configure 'At-Risk' duration limits for the {ACTIVE_PROGRAM} program. Students exceeding these days in an 'In-Progress' status will be automatically flagged for the Program Chair.")
+    
+    try:
+        t_df = conn.query(f"""
+            SELECT pt.cw_days, pt.ce_days, pt.cap_days 
+            FROM program_thresholds pt 
+            JOIN program p ON pt.program_id = p.program_id 
+            WHERE p.program_code = '{ACTIVE_PROGRAM}'
+        """, ttl=0)
+        cur_cw = int(t_df.iloc[0]['cw_days']) if not t_df.empty else 730
+        cur_ce = int(t_df.iloc[0]['ce_days']) if not t_df.empty else 180
+        cur_cap = int(t_df.iloc[0]['cap_days']) if not t_df.empty else 365
+    except Exception:
+        cur_cw, cur_ce, cur_cap = 730, 180, 365
+
+    with st.form("thresholds_form"):
+        c1, c2, c3 = st.columns(3)
+        new_cw = c1.number_input("Coursework Limit (Days)", value=cur_cw, min_value=1, help="Expected duration to clear core classes.")
+        new_ce = c2.number_input("Comp Exam Limit (Days)", value=cur_ce, min_value=1, help="Expected duration to pass the exam once initiated.")
+        new_cap = c3.number_input("Capstone Limit (Days)", value=cur_cap, min_value=1, help="Expected duration to defend capstone once started.")
+        
+        if st.form_submit_button("Save Program Thresholds"):
+            try:
+                with conn.session as s:
+                    s.execute(text("""
+                        INSERT INTO program_thresholds (program_id, cw_days, ce_days, cap_days)
+                        VALUES ((SELECT program_id FROM program WHERE program_code = :p), :cw, :ce, :cap)
+                        ON CONFLICT (program_id) DO UPDATE 
+                        SET cw_days = EXCLUDED.cw_days, ce_days = EXCLUDED.ce_days, cap_days = EXCLUDED.cap_days;
+                    """), {"p": ACTIVE_PROGRAM, "cw": new_cw, "ce": new_ce, "cap": new_cap})
+                    s.commit()
+                log_security_event(user["user_id"], "THRESHOLDS_UPDATED", f"Updated expected duration thresholds for {ACTIVE_PROGRAM}")
+                st.success(f"Thresholds saved for {ACTIVE_PROGRAM} successfully! Flags will recalculate on the next roster load.")
+                load_students.clear()
+            except Exception as e:
+                st.error(f"Error saving thresholds: {e}")
+
 
 # ------------------------------------------------------------------
 # VIEW: IT/ADMIN SCHEMA CONFIGURATION
@@ -535,7 +666,7 @@ def render_schema_mapping():
             UNION SELECT 'updated_at';
         """, ttl=0)
         actual_db_cols = actual_cols_df["column_name"].tolist()
-        mappings_df = conn.query("SELECT id, dashboard_field, db_column, description FROM field_mappings ORDER BY id;", ttl=0)
+        mappings_df = conn.query("SELECT mapping_id AS id, dashboard_field, db_column, description FROM field_mappings ORDER BY mapping_id;", ttl=0)
     except Exception as e:
         st.error(f"Database error loading schema details: {e}")
         return
@@ -569,7 +700,7 @@ def render_schema_mapping():
                 with conn.session as s:
                     for index, row in edited_df.iterrows():
                         s.execute(
-                            text("UPDATE field_mappings SET db_column = :col WHERE id = :idx"),
+                            text("UPDATE field_mappings SET db_column = :col WHERE mapping_id = :idx"),
                             {"col": row["db_column"], "idx": int(row["id"])}
                         )
                     s.commit()
@@ -641,7 +772,6 @@ def render_permissions_and_logs():
 
     with t_syslogs:
         st.caption("Tracks critical connection timeouts and schema errors (stored locally so they are accessible even if the database is completely offline).")
-        import os
         if os.path.exists("sync_error_log.txt"):
             with open("sync_error_log.txt", "r") as f:
                 logs = f.readlines()
@@ -668,30 +798,40 @@ def render_completion_trend_chart(df_all, active_program):
     ).reset_index()
     
     trend_df['completion_rate'] = (trend_df['completed_students'] / trend_df['total_students']) * 100
-    # Sort the Mapúa Term/Quarter Formats Chronologically (e.g. 1T2425 or 1Q2425)
     trend_df['sort_year'] = trend_df['cohort'].astype(str).str.extract(r'[TQ](\d{2})').astype(float)
     trend_df['sort_term'] = trend_df['cohort'].astype(str).str.extract(r'^(\d)[TQ]').astype(float)
     
     trend_df = trend_df.dropna(subset=['sort_year', 'sort_term']).sort_values(by=['sort_year', 'sort_term']).tail(4) 
     
     if trend_df.empty:
-        st.info("Not enough standard cohort terms (e.g., 1T2425) to form a trend line.")
+        st.info("Not enough standard cohort terms (e.g., 1Q2425) to form a trend line.")
         return
 
     fig = px.line(
         trend_df, x="cohort", y="completion_rate", markers=True,
+        text="completion_rate", # Binds the data values to text labels
         labels={"cohort": "Academic Term", "completion_rate": "Completion Rate (%)"}
     )
     
     fig.update_layout(
+        height=377, # Explicitly matched height
         yaxis_title="Completion Rate (%)",
         xaxis_title="Academic Term",
-        yaxis=dict(range=[-5, 105], fixedrange=True), 
+        yaxis=dict(range=[-5, 115], fixedrange=True), 
         xaxis=dict(fixedrange=True), 
         hovermode="x unified",
         margin=dict(l=10, r=10, t=30, b=10)
     )
-    fig.update_traces(line_color="#1E88E5", line_width=3, marker_size=8)
+    
+    # Format the labels as 1-decimal percentages and place them above the markers
+    fig.update_traces(
+        line_color="#D50000", # Program palette red for the trend line
+        marker=dict(color="#FFAE00", size=8), # Program palette yellow for the dots
+        line_width=3, 
+        texttemplate='%{text:.1f}%', 
+        textposition='top center',
+        textfont=dict(size=12, color="var(--text-color)")
+    )
     
     st.subheader(f"Completion Trend — Last 4 Terms", help="Shows the percentage of students in each cohort who have successfully completed all core coursework.")
     st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
@@ -700,301 +840,425 @@ def render_completion_trend_chart(df_all, active_program):
 # VIEW 1: STUDENT ROSTER (Dashboard)
 # ------------------------------------------------------------------
 def render_student_list(df_all):
-    active_cohort = st.session_state.get("cohort_filter", "All")
-    
-    if active_cohort == "All": 
-        summary_label = "All Cohorts"
-    elif len(active_cohort) == 6 and active_cohort[1] in ['T', 'Q']:
-        term_num = active_cohort[0]
-        term_type = active_cohort[1]  # Captures 'T' or 'Q' dynamically
-        y1 = active_cohort[2:4]
-        y2 = active_cohort[4:6]
-        summary_label = f"{term_num}{term_type}, A.Y. 20{y1}–20{y2}"
-    else: 
-        summary_label = active_cohort
-
-    st.markdown(f"#### Executive Summary — {summary_label}")
-    
-    df_summary = df_all.copy()
-    if active_cohort != "All":
-        df_summary = df_summary[df_summary["cohort"].astype(str) == active_cohort]
-
-    total_students = len(df_summary)
-    cw_completed = len(df_summary[df_summary["coursework_display"] == "Completed"])
-    exam_passed = len(df_summary[df_summary["comprehensive_exam_display"] == "Passed"])
-    capstone_defended = len(df_summary[df_summary["capstone_display"] == "Defended for Completion"])
-
-    evaluated_df = df_summary[
-        df_summary["graduate_on_time"].notna() & 
-        (df_summary["graduate_on_time"].astype(str).str.strip() != "") &
-        (~df_summary["graduate_on_time"].astype(str).str.lower().isin(["n/a", "none"]))
-    ]
-    grad_numerator = len(evaluated_df[evaluated_df["graduate_on_time"].astype(str).str.lower().isin(["yes", "y", "true", "1"])])
-    grad_denominator = total_students
-    on_time_rate = (grad_numerator / grad_denominator * 100) if grad_denominator > 0 else 0.0
-
-    fully_completed = len(
-        df_summary[
-            (df_summary["coursework_display"] == "Completed") & 
-            (df_summary["comprehensive_exam_display"] == "Passed") & 
-            (df_summary["capstone_display"] == "Defended for Completion")
-        ]
-    )
-    completion_rate = int((fully_completed / total_students * 100)) if total_students > 0 else 0
-
-    remaining_students = int(total_students - fully_completed)
-    missing_coursework = len(df_summary[df_summary["coursework_display"] != "Completed"])
-    missing_exam = len(df_summary[df_summary["comprehensive_exam_display"] != "Passed"])
-    missing_capstone = len(df_summary[df_summary["capstone_display"] != "Defended for Completion"])
-
-    top_c1, top_c2, top_c3, top_c4 = st.columns(4)
-    top_c1.metric(label="Total Students", value=total_students, help="Total students matching filters.")
-    top_c2.metric(label="Coursework", value=cw_completed, help="Completed required core coursework.")
-    top_c3.metric(label="Comprehensive Exam", value=exam_passed, help="Passed Comprehensive Examination.")
-    top_c4.metric(label="Capstones", value=capstone_defended, help="Defended and finalized Capstone project.")
-    st.write("")
-
+    # ----------------- Enterprise Roster Grid CSS -----------------
     st.markdown(
         """
         <style>
-        div[data-testid="stMetric"] {
-            background-color: var(--background-color);
-            border: 1px solid var(--secondary-background-color);
-            border-radius: 8px;
-            padding: 15px 20px;
-            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
-            border-top: 4px solid #c8102e; 
-        }
-        div[data-testid="stMetricLabel"] p {
-            text-transform: uppercase !important;
-            font-size: 0.75rem !important;
-            font-weight: 600 !important;
-            color: var(--faded-text-color) !important;
-            letter-spacing: 0.5px !important;
-        }
-        div[data-testid="stMetricValue"] div {
-            font-size: 2rem !important;
-            font-weight: 700 !important;
-            color: var(--text-color) !important;
+        .roster-th { font-size: 0.85rem; font-weight: 700; color: #666; text-transform: uppercase; }
+        .roster-th-divider { border-bottom: 2px solid #ddd; margin: 0.5rem 0 1rem 0; }
+        .roster-row-divider { border-bottom: 1px solid #eee; margin: 0.5rem 0; }
+        .roster-cell-text, .roster-cell-id { font-size: 0.9rem; color: var(--text-color); }
+        .status-pill { background-color: #f0f2f6; padding: 4px 8px; border-radius: 12px; font-size: 0.8rem; color: #31333F !important; font-weight: 600; }
+        .sr-risk-pill { background-color: #D500001A; color: #D50000; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
+        .sr-risk-none { background-color: #0080001A; color: #008000; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
+        
+        /* Force standard buttons to allow multi-line text */
+        div[data-testid="stButton"] button p {
+            white-space: normal !important;
+            line-height: 1.2 !important;
+            text-align: center !important;
         }
         </style>
         """,
         unsafe_allow_html=True
     )
 
-    grad_delta_str = f"{grad_numerator} of {total_students} total students"
-    if on_time_rate < 50: grad_delta_str = f"- {grad_numerator} of {total_students} total students"
-
-    comp_delta_str = f"{fully_completed} out of {total_students} students"
-    if completion_rate < 50: comp_delta_str = f"- {fully_completed} out of {total_students} students"
-
-    bot_c1, bot_c2, bot_c3 = st.columns(3)
-    grad_color_mode = "normal" if on_time_rate >= 50 else "inverse"
-    comp_color_mode = "normal" if completion_rate >= 50 else "inverse"
-
-    bot_c1.metric(label="On-Time Grad Rate", value=f"{on_time_rate:.1f}%", delta=f"{grad_numerator} out of {total_students} students", delta_color=grad_color_mode)
-    bot_c2.metric(label="Overall Completion", value=f"{completion_rate}%", delta=f"{fully_completed} out of {total_students} students", delta_color=comp_color_mode)
-    bot_c3.metric(label="Remaining Students", value=remaining_students, delta=None)
-    
-    col1, col2 = st.columns(2)
-
-    with col1:
-        title_col, clear_col = st.columns([5, 1])
-        with title_col: title_placeholder = st.empty()
-        with clear_col: clear_placeholder = st.empty()
-
-        chart_view = st.radio("Lifecycle Metrics View", ["Accomplished", "Pending"], horizontal=True, label_visibility="collapsed")
-
-        if chart_view == "Accomplished":
-            stage_counts = [cw_completed, exam_passed, capstone_defended]
-            help_text = "Absolute number and percentage of students who accomplished each milestone."
-        else:
-            stage_counts = [missing_coursework, missing_exam, missing_capstone]
-            help_text = "Absolute number and percentage of students who have not yet completed each milestone."
-
-        stage_df = pd.DataFrame({
-            "Lifecycle Stage": ["Coursework", "Comprehensive Exam", "Capstone"],
-            "Students": stage_counts
-        })
-
-        if total_students > 0: stage_df["Percentage"] = (stage_df["Students"] / total_students * 100)
-        else: stage_df["Percentage"] = 0.0
-
-        fig = px.bar(
-            stage_df, x="Percentage", y="Lifecycle Stage", orientation="h",
-            text="Percentage", custom_data=["Students"], range_x=[0, 100],
-            labels={"Percentage": f"Percentage of Active Students ({chart_view})", "Lifecycle Stage": ""}
-        )
-
-        fig.update_traces(
-            marker_color=["#0072B2", "#FFAE00", "#D50000"], texttemplate="%{text:.2f}%",
-            textposition="outside", hovertemplate="<b>%{y}</b><br>Students: %{customdata[0]}<extra></extra>"
-        )
-
-        fig.update_layout(
-            height=250, margin=dict(l=10, r=40, t=10, b=10),
-            xaxis=dict(range=[0, 100], ticksuffix="%", dtick=20, fixedrange=True),
-            yaxis=dict(categoryorder="array", categoryarray=["Capstone", "Comprehensive Exam", "Coursework"], fixedrange=True),
-            showlegend=False
-        )
-
-        chart_event = st.plotly_chart(
-            fig, width="stretch", config={"displayModeBar": False},
-            on_select="rerun", selection_mode="points", key=f"lifecycle_chart_{st.session_state.chart_key_counter}"
-        )
-
-        if chart_event and chart_event.selection:
-            selected_points = chart_event.selection.get("points", [])
-            if selected_points:
-                clicked_stage = selected_points[0].get("y")
-                if clicked_stage in ["Coursework", "Comprehensive Exam", "Capstone"]:
-                    st.session_state.drill_stage = clicked_stage
-            else: st.session_state.drill_stage = None
-
-        chart_title = "Lifecycle Stage Breakdown"
-        if st.session_state.drill_stage: chart_title += f" — {st.session_state.drill_stage}"
-
-        title_placeholder.subheader(chart_title, help=help_text)
-
-        if st.session_state.drill_stage:
-            if clear_placeholder.button("✕ Clear", key="clear_drill_chart", use_container_width=True):
-                st.session_state.drill_stage = None
-                st.session_state.chart_key_counter += 1
-                st.rerun()
-
-    with col2:
-        render_completion_trend_chart(df_all, ACTIVE_PROGRAM)
-
-    st.divider()
-
-    roster_title = f"Student Roster & Lifecycle Progress ({ACTIVE_PROGRAM})"
-    if st.session_state.drill_stage: roster_title += f" — {st.session_state.drill_stage}"
-    st.subheader(roster_title)
-    
-    search_col, cohort_col, adv_col, sort_col = st.columns([2, 1, 1.2, 1])
-    
-    with search_col: search_term = st.text_input("Search by name or student ID", placeholder="e.g. Adrian Santos or 2026124837")
-    with cohort_col:
-        valid_cohorts = sorted([str(c) for c in df_all["cohort"].dropna().unique().tolist()])
-        selected_cohort = st.selectbox("Filter by cohort", ["All"] + valid_cohorts, key="cohort_filter")
-    with adv_col:
-        valid_advisers = sorted([str(a) for a in df_all["adviser"].dropna().unique().tolist() if str(a).strip()])
-        current_user = st.session_state.user_info.get("full_name", "")
-        user_role = st.session_state.user_info.get("role", "")
-        
-        if "Advisor" in user_role or "Faculty" in user_role:
-            adv_view = st.selectbox("Adviser View", ["My Advisees", "All Students"])
-            selected_adviser = current_user if adv_view == "My Advisees" else "All"
-        else:
-            default_idx = valid_advisers.index(current_user) + 1 if current_user in valid_advisers else 0
-            selected_adviser = st.selectbox("Filter by Adviser", ["All"] + valid_advisers, index=default_idx)
-    with sort_col: sort_option = st.selectbox("Sort by", ["Name", "Student ID", "Overall Status"])
-
-    filtered = df_summary.copy()
-
-    if selected_adviser != "All": filtered = filtered[filtered["adviser"].astype(str) == selected_adviser]
-
-    if st.session_state.drill_stage == "Coursework":
-        if chart_view == "Accomplished": filtered = filtered[filtered["coursework_display"] == "Completed"]
-        else: filtered = filtered[filtered["coursework_display"] != "Completed"]
-    elif st.session_state.drill_stage == "Comprehensive Exam":
-        if chart_view == "Accomplished": filtered = filtered[filtered["comprehensive_exam_display"] == "Passed"]
-        else: filtered = filtered[filtered["comprehensive_exam_display"] != "Passed"]
-    elif st.session_state.drill_stage == "Capstone":
-        if chart_view == "Accomplished": filtered = filtered[filtered["capstone_display"] == "Defended for Completion"]
-        else: filtered = filtered[filtered["capstone_display"] != "Defended for Completion"]
-
-    if search_term:
-        term = search_term.strip().lower()
-        filtered = filtered[
-            filtered["full_name"].astype(str).str.lower().str.contains(term, na=False) | 
-            filtered["student_number"].astype(str).str.lower().str.contains(term, na=False)
+    # Helper function to reuse the exact same grid layout across multiple pages
+    def render_roster_grid(display_df, key_prefix):
+        col_widths = [0.9, 1.5, 0.8, 1.5, 1.2, 1.2, 1.4, 0.9, 0.9, 0.8]
+        header_labels = [
+            "STUDENT ID", "NAME", "COHORT", "ADVISER",
+            "COURSEWORK", "COMP EXAM", "CAPSTONE", "LAST UPDATE", "RISK", "ACTION"
         ]
 
-    sort_map = {"Name": "full_name", "Student ID": "student_number", "Overall Status": "overall_status"}
-    filtered = filtered.sort_values(sort_map[sort_option]).reset_index(drop=True)
+        header_cols = st.columns(col_widths, vertical_alignment="center")
+        for col, label in zip(header_cols, header_labels):
+            col.markdown(f'<div class="roster-th">{label}</div>', unsafe_allow_html=True)
+        st.markdown('<div class="roster-th-divider"></div>', unsafe_allow_html=True)
 
-    if filtered.empty:
-        if selected_adviser == current_user and not search_term and selected_cohort == "All" and not st.session_state.drill_stage:
-            st.info(f"You currently have no advisees assigned to you in the {ACTIVE_PROGRAM} program.")
+        if display_df.empty:
+            st.info("No students match the current filters.")
         else:
-            st.info(f"No results found for the {ACTIVE_PROGRAM} program matching your specific filters.")
-        return
+            with st.container(border=False, height=500):
+                for row in display_df.to_dict("records"):
+                    r_cols = st.columns(col_widths, vertical_alignment="center")
+                    
+                    r_cols[0].markdown(f'<span class="roster-cell-id">{row.get("Student ID", "")}</span>', unsafe_allow_html=True)
+                    r_cols[1].markdown(f'<span class="roster-cell-text" style="font-weight: bold;">{row.get("Name", "")}</span>', unsafe_allow_html=True)
+                    r_cols[2].markdown(f'<span class="roster-cell-text">{row.get("Cohort", "")}</span>', unsafe_allow_html=True)
+                    r_cols[3].markdown(f'<span class="roster-cell-text">{row.get("Adviser", "")}</span>', unsafe_allow_html=True)
+                    
+                    r_cols[4].markdown(get_stage_badge("coursework", row.get("Coursework", "")), unsafe_allow_html=True)
+                    r_cols[5].markdown(get_stage_badge("comprehensive_exam", row.get("Comprehensive Exam", "")), unsafe_allow_html=True)
+                    r_cols[6].markdown(get_stage_badge("capstone", row.get("Capstone", "")), unsafe_allow_html=True)
+                    
+                    last_upd = row.get("Last Update", "")
+                    display_date = last_upd if str(last_upd).strip() != "N/A" else "—"
+                    r_cols[7].markdown(f'<span class="roster-cell-text">{display_date}</span>', unsafe_allow_html=True)
+                    
+                    risk_status = str(row.get("Risk Status", ""))
+                    if risk_status.strip() == "Flagged":
+                        r_cols[8].markdown('<span class="sr-risk-pill">FLAGGED</span>', unsafe_allow_html=True)
+                    else:
+                        r_cols[8].markdown('<span class="sr-risk-none">ON TRACK</span>', unsafe_allow_html=True)
+                    
+                    with r_cols[9]:
+                        # Using on_click completely circumvents the instantiation error
+                        st.button(
+                            "**View\nProfile**", 
+                            key=f"view_{key_prefix}_{row.get('Student ID', '')}", 
+                            use_container_width=True, 
+                            on_click=go_to_profile, 
+                            args=(row.get("Email", ""),)
+                        )
+                    
+                    st.markdown('<div class="roster-row-divider"></div>', unsafe_allow_html=True)
 
-    st.markdown('''
-        <style>
-            [data-testid="stDataFrame"] td[style*="background-color"] {
-                display: inline-flex !important;
-                align-items: center !important;
-                margin: 6px 4px !important;
-                padding: 3px 12px !important;
-                border-radius: 999px !important;
-                border: 1.5px solid currentColor !important;
-                background-clip: padding-box !important;
-            }
-        </style>
-    ''', unsafe_allow_html=True)
+            st.caption(f"Showing {len(display_df)} students.")
+
+    # Standardize data preparation for the grids
+    def format_for_grid(df_subset):
+        return df_subset[[
+            "full_name", "student_number", "cohort", "risk_flag", "overall_status",
+            "coursework_display", "comprehensive_exam_display", "capstone_display", "adviser", "student_email", "coursework_updated_at"
+        ]].rename(columns={
+            "full_name": "Name", "student_number": "Student ID", "cohort": "Cohort", "risk_flag": "Risk Status",
+            "overall_status": "Overall Status", "coursework_display": "Coursework",
+            "comprehensive_exam_display": "Comprehensive Exam", "capstone_display": "Capstone", "adviser": "Adviser", "student_email": "Email", "coursework_updated_at": "Last Update"
+        })
+
+    active_cohort = st.session_state.get("cohort_filter", "All")
     
-    display_df = filtered[[
-        "full_name", "student_number", "cohort", "overall_status",
-        "coursework_display", "comprehensive_exam_display", "capstone_display", "adviser"
-    ]].rename(columns={
-        "full_name": "Name", "student_number": "Student ID", "cohort": "Cohort",
-        "overall_status": "Overall Status", "coursework_display": "Coursework",
-        "comprehensive_exam_display": "Comprehensive Exam", "capstone_display": "Capstone", "adviser": "Adviser"
-    })
+    if active_cohort == "All": 
+        summary_label = "All Cohorts"
+    elif len(active_cohort) == 6 and active_cohort[1] in ['T', 'Q']:
+        term_num = active_cohort[0]
+        term_type = active_cohort[1]
+        y1 = active_cohort[2:4]
+        y2 = active_cohort[4:6]
+        summary_label = f"{term_num}{term_type}, A.Y. 20{y1}–20{y2}"
+    else: 
+        summary_label = active_cohort
 
-    def style_bold_name(series): return ["font-weight: bold;" for _ in series]
+    df_summary = df_all.copy()
+    if active_cohort != "All":
+        df_summary = df_summary[df_summary["cohort"].astype(str) == active_cohort]
 
-    styled_df = (
-        display_df.style
-        .apply(style_bold_name, subset=["Name"])
-        .apply(make_status_styler("coursework"), subset=["Coursework"])
-        .apply(make_status_styler("comprehensive_exam"), subset=["Comprehensive Exam"])
-        .apply(make_status_styler("capstone"), subset=["Capstone"])
-    )
+    # --- RENDER EXECUTIVE DASHBOARD ---
+    if st.session_state.admin_view == "Executive Dashboard":
+        st.markdown(f"#### Executive Summary — {summary_label}")
+        
+        # --- Dashboard Filters (No Search or Sort) ---
+        cohort_col, adv_col = st.columns(2)
+        with cohort_col:
+            valid_cohorts = sorted([str(c) for c in df_all["cohort"].dropna().unique().tolist() if str(c).strip()], key=get_cohort_val)
+            selected_cohort = st.selectbox("Filter by cohort", ["All"] + valid_cohorts, key="cohort_filter")
+        with adv_col:
+            valid_advisers = sorted([str(a) for a in df_all["adviser"].dropna().unique().tolist() if str(a).strip()])
+            current_user = st.session_state.user_info.get("full_name", "")
+            user_role = st.session_state.user_info.get("role", "")
+            
+            if "Advisor" in user_role or "Faculty" in user_role:
+                adv_view = st.selectbox("Adviser View", ["My Advisees", "All Students"], key="adv_view_toggle")
+                selected_adviser = current_user if adv_view == "My Advisees" else "All"
+            else:
+                default_idx = valid_advisers.index(current_user) + 1 if current_user in valid_advisers else 0
+                selected_adviser = st.selectbox("Filter by Adviser", ["All"] + valid_advisers, index=default_idx, key="adviser_filter")
 
-    def log_csv_export():
-        user = st.session_state.user_info
-        log_security_event(user["user_id"], "DATA_EXPORT", f"Exported {len(display_df)} filtered student records to CSV.")
+        # Apply Adviser Filter to the dashboard metrics!
+        if selected_adviser != "All":
+            df_summary = df_summary[df_summary["adviser"].astype(str) == selected_adviser]
+            
+        total_students = len(df_summary)
+        cw_completed = len(df_summary[df_summary["coursework_display"] == "Completed"])
+        exam_passed = len(df_summary[df_summary["comprehensive_exam_display"] == "Passed"])
+        capstone_defended = len(df_summary[df_summary["capstone_display"] == "Defended"])
 
-    table_key = f"student_table_{st.session_state.table_key_counter}"
-    event = st.dataframe(
-        styled_df, key=table_key, hide_index=True, width="stretch", on_select="rerun", selection_mode="single-cell",
-        column_config={
-            "Name": st.column_config.TextColumn("Student Name", width="medium"),
-            "Student ID": st.column_config.TextColumn("Student ID", width="small"),
-            "Cohort": st.column_config.TextColumn("Cohort", width="small"),
-            "Overall Status": st.column_config.TextColumn("Status", width="small"),
-            "Coursework": st.column_config.TextColumn("Coursework", width="small"),
-            "Comprehensive Exam": st.column_config.TextColumn("Comprehensive Exam", width="small"),
-            "Capstone": st.column_config.TextColumn("Capstone", width="medium"),
-            "Adviser": st.column_config.TextColumn("Adviser", width="medium"),
-        }
-    )
+        evaluated_df = df_summary[
+            df_summary["graduate_on_time"].notna() & 
+            (df_summary["graduate_on_time"].astype(str).str.strip() != "") &
+            (~df_summary["graduate_on_time"].astype(str).str.lower().isin(["n/a", "none"]))
+        ]
+        grad_numerator = len(evaluated_df[evaluated_df["graduate_on_time"].astype(str).str.lower().isin(["yes", "y", "true", "1"])])
+        grad_denominator = total_students
+        on_time_rate = (grad_numerator / grad_denominator * 100) if grad_denominator > 0 else 0.0
 
-    selected_row_idx = None
-    if event and hasattr(event, "selection") and event.selection.get("cells"):
-        selected_row_idx = event.selection["cells"][0][0]
+        fully_completed = len(
+            df_summary[
+                (df_summary["coursework_display"] == "Completed") & 
+                (df_summary["comprehensive_exam_display"] == "Passed") & 
+                (df_summary["capstone_display"] == "Defended")
+            ]
+        )
+        completion_rate = int((fully_completed / total_students * 100)) if total_students > 0 else 0
 
-    if selected_row_idx is not None:
-        selected_record = filtered.iloc[selected_row_idx]
-        selected_email = selected_record.get("student_email") or selected_record.get("email")
-        if selected_email:
-            go_to_profile(selected_email)
-            st.rerun()
+        remaining_students = int(total_students - fully_completed)
+        missing_coursework = len(df_summary[df_summary["coursework_display"] != "Completed"])
+        missing_exam = len(df_summary[df_summary["comprehensive_exam_display"] != "Passed"])
+        missing_capstone = len(df_summary[df_summary["capstone_display"] != "Defended"])
 
-    col_empty, col_export = st.columns([5, 1])
-    with col_export:
-        st.download_button(
-            label="📥 Export to CSV",
-            data=display_df.to_csv(index=False).encode('utf-8'),
-            file_name=f"{ACTIVE_PROGRAM}_roster_export.csv",
-            mime="text/csv",
-            on_click=log_csv_export
+        # --- TERM-OVER-TERM COMPARISON LOGIC ---
+        all_cohorts_sorted = sorted([str(c) for c in df_all["cohort"].dropna().unique() if str(c).strip()], key=get_cohort_val)
+        
+        prior_cohort = None
+        if active_cohort != "All" and active_cohort in all_cohorts_sorted:
+            idx = all_cohorts_sorted.index(active_cohort)
+            if idx > 0:
+                prior_cohort = all_cohorts_sorted[idx - 1]
+
+        if prior_cohort:
+            df_prior = df_all[df_all["cohort"].astype(str) == prior_cohort]
+            p_total = len(df_prior)
+            
+            p_eval = df_prior[
+                df_prior["graduate_on_time"].notna() & 
+                (df_prior["graduate_on_time"].astype(str).str.strip() != "") &
+                (~df_prior["graduate_on_time"].astype(str).str.lower().isin(["n/a", "none"]))
+            ]
+            p_grad_num = len(p_eval[p_eval["graduate_on_time"].astype(str).str.lower().isin(["yes", "y", "true", "1"])])
+            p_on_time_rate = (p_grad_num / p_total * 100) if p_total > 0 else 0.0
+            
+            p_comp = len(df_prior[
+                (df_prior["coursework_display"] == "Completed") & 
+                (df_prior["comprehensive_exam_display"] == "Passed") & 
+                (df_prior["capstone_display"] == "Defended")
+            ])
+            p_comp_rate = int((p_comp / p_total * 100)) if p_total > 0 else 0.0
+            
+            p_rem = p_total - p_comp
+            
+            grad_delta_str = f"{on_time_rate - p_on_time_rate:+.1f}% vs {prior_cohort}"
+            comp_delta_str = f"{completion_rate - p_comp_rate:+.0f}% vs {prior_cohort}"
+            rem_delta_str = f"{remaining_students - p_rem:+} vs {prior_cohort}"
+            
+            grad_color_mode = "normal"
+            comp_color_mode = "normal"
+            rem_color_mode = "inverse"
+        else:
+            grad_delta_str = f"{grad_numerator} out of {total_students} students"
+            comp_delta_str = f"{fully_completed} out of {total_students} students"
+            rem_delta_str = f"{remaining_students} out of {total_students} students"
+            
+            grad_color_mode = "normal" if on_time_rate >= 50 else "inverse"
+            comp_color_mode = "normal" if completion_rate >= 50 else "inverse"
+            
+            rem_percentage = (remaining_students / total_students * 100) if total_students > 0 else 0
+            rem_color_mode = "inverse" if rem_percentage > 50 else "normal"
+
+        top_c1, top_c2, top_c3, top_c4 = st.columns(4)
+        top_c1.metric(label="Total Students", value=total_students, help="Total students matching filters.")
+        top_c2.metric(label="Coursework", value=cw_completed, help="Completed required core coursework.")
+        top_c3.metric(label="Comprehensive Exam", value=exam_passed, help="Passed Comprehensive Examination.")
+        top_c4.metric(label="Capstones", value=capstone_defended, help="Defended and finalized Capstone project.")
+        st.write("")
+
+        st.markdown(
+            """
+            <style>
+            div[data-testid="stMetric"] {
+                background-color: var(--background-color);
+                border: 1px solid var(--secondary-background-color);
+                border-radius: 8px;
+                padding: 15px 20px;
+                box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
+                border-top: 4px solid #c8102e; 
+            }
+            div[data-testid="stMetricLabel"] p {
+                text-transform: uppercase !important;
+                font-size: 0.75rem !important;
+                font-weight: 600 !important;
+                color: var(--faded-text-color) !important;
+                letter-spacing: 0.5px !important;
+            }
+            div[data-testid="stMetricValue"] div {
+                font-size: 2rem !important;
+                font-weight: 700 !important;
+                color: var(--text-color) !important;
+            }
+            
+            /* Make bordered containers look exactly like the metric tiles */
+            div[data-testid="stVerticalBlockBorderWrapper"] {
+                border-radius: 8px !important;
+                box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06) !important;
+                border-top: 4px solid #c8102e !important;
+                background-color: var(--background-color);
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
         )
 
-    st.caption("Tip: click on any cell (e.g. Student Name) to inspect the candidate's profile.")
+        bot_c1, bot_c2, bot_c3 = st.columns(3)
+        bot_c1.metric(label="On-Time Grad Rate", value=f"{on_time_rate:.1f}%", delta=grad_delta_str, delta_color=grad_color_mode)
+        bot_c2.metric(label="Overall Completion", value=f"{completion_rate}%", delta=comp_delta_str, delta_color=comp_color_mode)
+        bot_c3.metric(label="Remaining Students", value=remaining_students, delta=rem_delta_str, delta_color=rem_color_mode)
+        
+        col1, col2 = st.columns(2)
+
+        with col1:
+            with st.container(border=True): 
+                title_col, clear_col = st.columns([5, 1])
+                with title_col: title_placeholder = st.empty()
+                with clear_col: clear_placeholder = st.empty()
+
+                chart_view = st.selectbox("Lifecycle Metrics View", ["Accomplished", "Pending"], label_visibility="collapsed", key="chart_view_state")
+
+                if chart_view == "Accomplished":
+                    stage_counts = [cw_completed, exam_passed, capstone_defended]
+                    help_text = "Absolute number and percentage of students who accomplished each milestone."
+                else:
+                    stage_counts = [missing_coursework, missing_exam, missing_capstone]
+                    help_text = "Absolute number and percentage of students who have not yet completed each milestone."
+
+                stage_df = pd.DataFrame({
+                    "Lifecycle Stage": ["Coursework", "Comprehensive Exam", "Capstone"],
+                    "Students": stage_counts
+                })
+
+                if total_students > 0: stage_df["Percentage"] = (stage_df["Students"] / total_students * 100)
+                else: stage_df["Percentage"] = 0.0
+
+                fig = px.bar(
+                    stage_df, x="Percentage", y="Lifecycle Stage", orientation="h",
+                    text="Percentage", custom_data=["Students"], range_x=[0, 100],
+                    labels={"Percentage": f"Percentage of Active Students ({chart_view})", "Lifecycle Stage": ""}
+                )
+
+                fig.update_traces(
+                    marker_color=["#0072B2", "#FFAE00", "#D50000"], texttemplate="%{text:.2f}%",
+                    textposition="outside", hovertemplate="<b>%{y}</b><br>Students: %{customdata[0]}<extra></extra>"
+                )
+
+                fig.update_layout(
+                    height=320, margin=dict(l=10, r=40, t=30, b=10),
+                    xaxis=dict(range=[0, 100], ticksuffix="%", dtick=20, fixedrange=True),
+                    yaxis=dict(categoryorder="array", categoryarray=["Capstone", "Comprehensive Exam", "Coursework"], fixedrange=True),
+                    showlegend=False,
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)"
+                )
+
+                chart_event = st.plotly_chart(
+                    fig, width="stretch", config={"displayModeBar": False},
+                    on_select="rerun", selection_mode="points", key=f"lifecycle_chart_{st.session_state.chart_key_counter}"
+                )
+
+                if chart_event and chart_event.selection:
+                    selected_points = chart_event.selection.get("points", [])
+                    if selected_points:
+                        clicked_stage = selected_points[0].get("y")
+                        if clicked_stage in ["Coursework", "Comprehensive Exam", "Capstone"]:
+                            st.session_state.drill_stage = clicked_stage
+                    else: st.session_state.drill_stage = None
+
+                chart_title = "Lifecycle Stage Breakdown"
+                if st.session_state.drill_stage: chart_title += f" — {st.session_state.drill_stage}"
+
+                title_placeholder.subheader(chart_title, help=help_text)
+
+                if st.session_state.drill_stage:
+                    if clear_placeholder.button("✕ Clear", key="clear_drill_chart", use_container_width=True):
+                        st.session_state.drill_stage = None
+                        st.session_state.chart_key_counter += 1
+                        st.rerun()
+
+        with col2:
+            with st.container(border=True): 
+                render_completion_trend_chart(df_all, ACTIVE_PROGRAM)
+
+        # -- Dashboard Risk Table --
+        st.divider()
+        st.subheader("🚨 Students At Risk")
+        st.caption("Students who have exceeded expected duration thresholds for their current lifecycle stage.")
+        
+        at_risk_df = df_summary[df_summary["is_at_risk"] == True].copy()
+        
+        if at_risk_df.empty:
+            st.success("Great news! No students are currently flagged as at-risk.")
+        else:
+            # Default sort by name since we removed the sort dropdown
+            display_risk_df = format_for_grid(at_risk_df.sort_values("full_name").reset_index(drop=True))
+            render_roster_grid(display_risk_df, key_prefix="dash")
+
+    # --- RENDER STUDENT ROSTER ---
+    elif st.session_state.admin_view == "Student Roster":
+        chart_view = st.session_state.get("chart_view_state", "Accomplished")
+        
+        roster_title = f"Student Roster & Lifecycle Progress ({ACTIVE_PROGRAM})"
+        if st.session_state.drill_stage: roster_title += f" — {st.session_state.drill_stage}"
+        
+        # Top Header: Title on the left, Export button on the right
+        top_left_col, top_right_col = st.columns([4, 1], vertical_alignment="bottom")
+        with top_left_col:
+            st.subheader(roster_title)
+        with top_right_col:
+            def log_csv_export():
+                if st.session_state.user_info:
+                    log_security_event(st.session_state.user_info["user_id"], "DATA_EXPORT", f"Exported {ACTIVE_PROGRAM} student roster to CSV.")
+
+            st.download_button(
+                label="📥 Export CSV",
+                data=display_df.to_csv(index=False).encode('utf-8') if 'display_df' in locals() else "",
+                file_name=f"{ACTIVE_PROGRAM}_roster_export.csv",
+                mime="text/csv",
+                on_click=log_csv_export,
+                use_container_width=True
+            )
+        
+        search_col, cohort_col, adv_col, sort_col = st.columns([2, 1, 1.2, 1])
+        
+        with search_col: search_term = st.text_input("Search by name or student ID", placeholder="e.g. Adrian Santos or 2026124837", key="search_filter")
+        with cohort_col:
+            valid_cohorts = sorted([str(c) for c in df_all["cohort"].dropna().unique().tolist() if str(c).strip()], key=get_cohort_val)
+            selected_cohort = st.selectbox("Filter by cohort", ["All"] + valid_cohorts, key="cohort_filter")
+        with adv_col:
+            valid_advisers = sorted([str(a) for a in df_all["adviser"].dropna().unique().tolist() if str(a).strip()])
+            current_user = st.session_state.user_info.get("full_name", "")
+            user_role = st.session_state.user_info.get("role", "")
+            
+            if "Advisor" in user_role or "Faculty" in user_role:
+                adv_view = st.selectbox("Adviser View", ["My Advisees", "All Students"], key="adv_view_toggle")
+                selected_adviser = current_user if adv_view == "My Advisees" else "All"
+            else:
+                default_idx = valid_advisers.index(current_user) + 1 if current_user in valid_advisers else 0
+                selected_adviser = st.selectbox("Filter by Adviser", ["All"] + valid_advisers, index=default_idx, key="adviser_filter")
+        with sort_col: sort_option = st.selectbox("Sort by", ["Name", "Student ID", "Overall Status"], key="sort_filter")
+
+        filtered = df_summary.copy()
+
+        if selected_adviser != "All": filtered = filtered[filtered["adviser"].astype(str) == selected_adviser]
+
+        if st.session_state.drill_stage == "Coursework":
+            if chart_view == "Accomplished": filtered = filtered[filtered["coursework_display"] == "Completed"]
+            else: filtered = filtered[filtered["coursework_display"] != "Completed"]
+        elif st.session_state.drill_stage == "Comprehensive Exam":
+            if chart_view == "Accomplished": filtered = filtered[filtered["comprehensive_exam_display"] == "Passed"]
+            else: filtered = filtered[filtered["comprehensive_exam_display"] != "Passed"]
+        elif st.session_state.drill_stage == "Capstone":
+            if chart_view == "Accomplished": filtered = filtered[filtered["capstone_display"] == "Defended"]
+            else: filtered = filtered[filtered["capstone_display"] != "Defended"]
+
+        if search_term:
+            term = search_term.strip().lower()
+            filtered = filtered[
+                filtered["full_name"].astype(str).str.lower().str.contains(term, na=False) | 
+                filtered["student_number"].astype(str).str.lower().str.contains(term, na=False)
+            ]
+
+        sort_map = {"Name": "full_name", "Student ID": "student_number", "Overall Status": "overall_status"}
+        filtered = filtered.sort_values(sort_map[sort_option]).reset_index(drop=True)
+
+        if filtered.empty:
+            if selected_adviser == current_user and not search_term and selected_cohort == "All" and not st.session_state.drill_stage:
+                st.info(f"You currently have no advisees assigned to you in the {ACTIVE_PROGRAM} program.")
+            else:
+                st.info(f"No results found for the {ACTIVE_PROGRAM} program matching your specific filters.")
+            return
+
+        display_df = format_for_grid(filtered)
+        
+        # Render the exact same HTML grid format, but pass 'roster' as the prefix to prevent duplicate button keys
+        render_roster_grid(display_df, key_prefix="roster")
 
 # ------------------------------------------------------------------
 # VIEW 2: STUDENT PROFILE (Read / Write Record Inspector)
@@ -1002,11 +1266,45 @@ def render_student_list(df_all):
 def render_student_profile(df_all):
     st.subheader("Student Profile Inspector")
 
-    if st.button("← Back to student list"):
-        go_to_list()
-        st.rerun()
-
     email = st.session_state.selected_student_email
+
+    # Top controls: Stacked Back button and Global Search Bar (Using Callbacks)
+    st.button("← Back", on_click=go_to_list)
+            
+    # Clean the data to prevent NaN/None dictionary errors
+    clean_df = df_all.dropna(subset=["student_email"])
+    
+    # Create a safe mapping dictionary for the dropdown display using Student ID
+    display_map = {"": "🔍 Search for a student..."}
+    for _, row in clean_df.iterrows():
+        e = row["student_email"]
+        n = row["full_name"]
+        sn = row.get("student_number", "Unknown ID")
+        display_map[e] = f"{n} ({sn})"
+        
+    options = [""] + clean_df["student_email"].tolist()
+    default_idx = options.index(email) if email in options else 0
+
+    # Callback to handle the search bar dynamically
+    def handle_search_change():
+        selected = st.session_state.global_profile_search
+        if selected and selected != email:
+            go_to_profile(selected)
+
+    st.selectbox(
+        "Search for a student", 
+        options, 
+        index=default_idx,
+        format_func=lambda x: display_map.get(x, "Unknown Student"),
+        label_visibility="collapsed",
+        key="global_profile_search",
+        on_change=handle_search_change
+    )
+
+    if not email or email not in options:
+        st.info("👆 No student selected. Please search for a student using the bar above to view their profile.")
+        return
+
     match = df_all[df_all["student_email"] == email]
     
     if match.empty:
@@ -1018,11 +1316,14 @@ def render_student_profile(df_all):
     student = match.iloc[0]
 
     st.markdown(f"### {student['full_name']}")
-    info1, info2, info3, info4 = st.columns(4)
-    info1.write(f"**Student ID:** `{student['student_number']}`")
-    info2.write(f"**Email:** [{student['student_email']}](mailto:{student['student_email']})")
-    info3.write(f"**Cohort:** {student['cohort'] if pd.notna(student['cohort']) else 'N/A'}")
-    info4.markdown(f"**Overall Status:** {status_badge(student['overall_status'])}", unsafe_allow_html=True)
+    col1, col2, col3, col4 = st.columns([1.2, 2.0, 1, 1.5])
+    col1.write(f"**Student ID:** `{student['student_number']}`")
+    col2.write(f"**Email:** [{student['student_email']}](mailto:{student['student_email']})")
+    col3.write(f"**Cohort:** {student['cohort'] if pd.notna(student['cohort']) else 'N/A'}")
+    col4.markdown(f"**Overall Status:** {status_badge(student['overall_status'])}", unsafe_allow_html=True)
+
+    if student.get('is_at_risk'):
+        st.error(f"**🚨 At-Risk Flag Activated:** {student['risk_details']}")
 
     st.divider()
     st.markdown("#### Program Lifecycle Summary")
@@ -1084,7 +1385,17 @@ def render_student_profile(df_all):
         c1.write(f"**Graduating On Time:** {display_ontime}")
         
         raw_term = student.get("graduate_date_term_sy")
-        display_term = str(raw_term).strip() if pd.notna(raw_term) and str(raw_term).strip().lower() not in ("nan", "none", "") else "To Be Determined (TBD)"
+        display_term = "To Be Determined (TBD)"
+        
+        if pd.notna(raw_term) and str(raw_term).strip().lower() not in ("nan", "none", ""):
+            term_str = str(raw_term).strip().upper()
+            match = re.match(r'^(\d)([TQ])(\d{2})(\d{2})$', term_str)
+            if match:
+                t_num, t_type, y1, y2 = match.groups()
+                display_term = f"{t_num}{t_type}, A.Y. 20{y1}–20{y2}"
+            else:
+                display_term = term_str
+
         c2.write(f"**Target Graduation Term:** {display_term}")
 
         is_authorized_editor = user.get("can_edit", False)
@@ -1104,7 +1415,7 @@ def render_student_profile(df_all):
 
             cw_opts = ["Pending", "Completed", "Cancelled"]
             ce_opts = ["In-Progress", "Passed", "Incomplete"]
-            cap_opts = ["In-Progress", "Defended for Completion", "Incomplete"]
+            cap_opts = ["In-Progress", "Defended", "Incomplete"]
 
             def get_idx(val, lst): return lst.index(val) if val in lst else 0
 
@@ -1128,7 +1439,7 @@ def render_student_profile(df_all):
                 else:
                     cw_db_map = {"Pending": "pending", "Completed": "completed", "Cancelled": "cancelled"}
                     ce_db_map = {"Passed": "done", "In-Progress": "not yet taken", "Incomplete": "incomplete"}
-                    cap_db_map = {"Defended for Completion": "done", "In-Progress": "not yet done", "Incomplete": "incomplete"}
+                    cap_db_map = {"Defended": "done", "In-Progress": "not yet done", "Incomplete": "incomplete"}
                     
                     cw_val = cw_db_map.get(new_cw, "pending")
                     ce_val = ce_db_map.get(new_ce, "incomplete")
@@ -1141,7 +1452,6 @@ def render_student_profile(df_all):
                                 adv_res = s.execute(text("SELECT adviser_id FROM advisers WHERE full_name = :name"), {"name": new_adv}).fetchone()
                                 if adv_res: adv_id = adv_res[0]
                                     
-                            # Update base details on normalized student table
                             s.execute(
                                 text("""
                                     UPDATE students_normalized 
@@ -1151,7 +1461,6 @@ def render_student_profile(df_all):
                                 {"rem": new_remarks, "adv": adv_id, "sn": int(student["student_number"])}
                             )
                             
-                            # Helper block to execute lifecycle upserts cleanly
                             upsert_sql = text("""
                                 INSERT INTO student_lifecycle_status (student_number, stage_id, status_id, last_updated_date)
                                 VALUES (
@@ -1194,7 +1503,7 @@ def render_footer(last_sync_time):
     )
 
 # ------------------------------------------------------------------
-# MASTER ROUTER (With Sync Error Handling)
+# MASTER ROUTER
 # ------------------------------------------------------------------
 if "consecutive_sync_failures" not in st.session_state:
     st.session_state.consecutive_sync_failures = 0
@@ -1207,14 +1516,20 @@ elif st.session_state.admin_view == "Permissions & Audit Logs":
     render_permissions_and_logs()
 else:
     try:
-        df_all, last_sync = load_students(ACTIVE_PROGRAM)
-        st.session_state.consecutive_sync_failures = 0
-        st.caption(f"🕒 **Data Last Synchronized:** `{last_sync}`")
-        
-        if st.session_state.page == "profile" and st.session_state.selected_student_email: render_student_profile(df_all)
-        else: render_student_list(df_all)
+            df_all, last_sync = load_students(ACTIVE_PROGRAM)
+            st.session_state.consecutive_sync_failures = 0
+            st.caption(f"🕒 **Data Last Synchronized:** `{last_sync}`")
+            
+            if st.session_state.admin_view == "Student Profile Inspector": 
+                render_student_profile(df_all)
+            elif st.session_state.admin_view == "Executive Dashboard" or st.session_state.admin_view == "Student Roster":
+                render_student_list(df_all)
+            else:
+                # Placeholder renderer for admin configuration pages
+                st.subheader(f"⚙️ {st.session_state.admin_view}")
+                st.info("This configuration module is active and securely bound to your admin credentials.")
 
-        render_footer(last_sync)
+            render_footer(last_sync)
 
     except Exception as e:
         st.session_state.consecutive_sync_failures += 1
