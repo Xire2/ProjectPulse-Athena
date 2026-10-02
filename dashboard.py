@@ -34,8 +34,8 @@ PALETTE = {
 
 STAGE_THRESHOLDS = {
     "coursework": {"green": ["Completed"], "yellow": ["Pending"], "red": ["Cancelled"]},
-    "comprehensive_exam": {"green": ["Passed"], "yellow": ["In-Progress"], "red": ["Incomplete", "Cancelled"]},  # Added "Cancelled"
-    "capstone": {"green": ["Defended for Completion"], "yellow": ["In-Progress"], "red": ["Incomplete", "Cancelled"]},        # Added "Cancelled"
+    "comprehensive_exam": {"green": ["Passed"], "yellow": ["In-Progress"], "red": ["Incomplete", "Cancelled"]},
+    "capstone": {"green": ["Defended for Completion"], "yellow": ["In-Progress"], "red": ["Incomplete", "Cancelled"]}, 
 }
 
 COURSEWORK_MAP = {"completed": "Completed", "cancelled": "Cancelled", "pending": "Pending"}
@@ -45,7 +45,7 @@ COMPREHENSIVE_EXAM_MAP = {
     "incomplete": "Incomplete", 
     "not yet taken": "In-Progress", 
     "abs/failed": "Incomplete",
-    "cancelled": "Cancelled"  # <--- Added here
+    "cancelled": "Cancelled" 
 }
 
 CAPSTONE_MAP = {
@@ -55,20 +55,17 @@ CAPSTONE_MAP = {
     "in current load": "In-Progress", 
     "incomplete": "In-Progress", 
     "n/a": "In-Progress",
-    "cancelled": "Cancelled"  # <--- Added here
+    "cancelled": "Cancelled"
 }
 
 def map_status(raw_value, mapping, default="Unknown"):
     if raw_value is None or pd.isna(raw_value): return default
     return mapping.get(str(raw_value).strip().lower(), default)
 
-
 # ------------------------------------------------------------------
 # BADGE / PILL RENDERING (replaces emoji-dot indicators)
 # ------------------------------------------------------------------
 def render_pill(label: str, color_key: str) -> str:
-    """Returns an HTML pill badge — rounded border, tinted background, colored text.
-    Only safe to use with st.markdown(..., unsafe_allow_html=True) or similar."""
     c = PALETTE.get(color_key, PALETTE["gray"])
     hex_color = c["hex"]
     return (
@@ -78,8 +75,6 @@ def render_pill(label: str, color_key: str) -> str:
     )
 
 def get_stage_badge(stage: str, status_label: str) -> str:
-    """HTML pill badge for a specific lifecycle stage. Use only where unsafe_allow_html=True
-    is set (e.g. the student profile page), NOT inside st.dataframe cells."""
     rule = STAGE_THRESHOLDS.get(stage, {})
     clean_label = str(status_label).strip()
     if clean_label in rule.get("green", []): color_key = "green"
@@ -89,9 +84,6 @@ def get_stage_badge(stage: str, status_label: str) -> str:
     return render_pill(clean_label, color_key)
 
 def make_status_styler(stage: str):
-    """Returns a pandas Styler-compatible function that highlights a status column's
-    cells with tinted background + bold colored text, for use inside st.dataframe
-    (which cannot render real HTML pills, only cell-level color styling)."""
     def _style(series):
         rule = STAGE_THRESHOLDS.get(stage, {})
         styles = []
@@ -106,7 +98,6 @@ def make_status_styler(stage: str):
     return _style
 
 def status_badge(label: str) -> str:
-    """HTML pill badge for the generic Overall Status field. Use with unsafe_allow_html=True."""
     key_map = {
         "Completed": "green", "Passed": "green", "Defended for Completion": "green",
         "Graduated": "green", "Enrolled": "green",
@@ -118,20 +109,12 @@ def status_badge(label: str) -> str:
     return render_pill(str(label), color_key)
 
 def overall_status(row) -> str:
-    # Use existing overall_status if explicitly provided by the database mapping
     if "overall_status" in row and pd.notna(row["overall_status"]) and str(row["overall_status"]).strip():
         return str(row["overall_status"]).strip()
-    
-    # Strictly evaluate based on coursework_status pillar
     coursework = str(row.get("coursework_status", "")).strip().upper()
-    
-    if coursework == "PENDING": 
-        return "Active"
-    elif coursework == "COMPLETED": 
-        return "Graduated"
-    elif coursework == "CANCELLED": 
-        return "Cancelled"
-    
+    if coursework == "PENDING": return "Active"
+    elif coursework == "COMPLETED": return "Graduated"
+    elif coursework == "CANCELLED": return "Cancelled"
     return "Unknown"
 
 
@@ -145,15 +128,15 @@ except Exception as e:
     st.exception(e)
     st.stop()
 
-def log_security_event(username: str, role: str, event_type: str, details: str):
+def log_security_event(user_id: int, event_type: str, details: str):
     try:
         with conn.session as s:
             s.execute(
                 text("""
-                    INSERT INTO audit_logs (username, role, event_type, details)
-                    VALUES (:username, :role, :event_type, :details);
+                    INSERT INTO audit_logs (user_id, event_type, details)
+                    VALUES (:uid, :event_type, :details);
                 """),
-                {"username": username, "role": role, "event_type": event_type, "details": details}
+                {"uid": user_id, "event_type": event_type, "details": details}
             )
             s.commit()
     except Exception as err:
@@ -179,7 +162,12 @@ def authenticate_user(username: str, password_attempt: str):
 @st.cache_data(ttl=60)
 def load_dashboard_config():
     try:
-        res = conn.query("SELECT active_program, current_term FROM dashboard_config WHERE id = 1;", ttl=0)
+        res = conn.query("""
+            SELECT p.program_code AS active_program, dc.current_term 
+            FROM dashboard_config dc
+            LEFT JOIN program p ON dc.program_id = p.program_id
+            WHERE dc.config_id = 1;
+        """, ttl=0)
         if not res.empty:
             return res.iloc[0]["active_program"], res.iloc[0]["current_term"]
     except Exception:
@@ -194,9 +182,39 @@ ACTIVE_PROGRAM, CURRENT_TERM_LABEL = load_dashboard_config()
 # ------------------------------------------------------------------
 @st.cache_data(ttl=60, show_spinner="Loading mapped student roster...")
 def load_students(target_program: str) -> tuple[pd.DataFrame, str]:
-    # Ensure we select updated_at from the students table if it exists
     try:
-        df = conn.query("SELECT * FROM students;", ttl=0)
+        query = """
+            SELECT 
+                s.student_number,
+                s.student_email,
+                s.first_name,
+                s.last_name,
+                s.adviser_id,
+                a.full_name AS adviser,
+                s.graduate_on_time,
+                s.graduate_date_term_sy,
+                s.remarks,
+                s.created_at,
+                c.cohort_code AS cohort,
+                p.program_code AS program,
+                p.program_name AS program_name,
+                MAX(CASE WHEN stg.stage_name = 'coursework' THEN sts.status_name END) AS coursework_status,
+                MAX(CASE WHEN stg.stage_name = 'comprehensive_exam' THEN sts.status_name END) AS comprehensive_exam,
+                MAX(CASE WHEN stg.stage_name = 'capstone' THEN sts.status_name END) AS capstone,
+                MAX(CASE WHEN stg.stage_name = 'coursework' THEN sls.last_updated_date END) AS updated_at
+            FROM students_normalized s
+            LEFT JOIN cohort c ON s.cohort_id = c.cohort_id
+            LEFT JOIN program p ON s.program_id = p.program_id
+            LEFT JOIN advisers a ON s.adviser_id = a.adviser_id
+            LEFT JOIN student_lifecycle_status sls ON s.student_number = sls.student_number
+            LEFT JOIN lifecycle_stage stg ON sls.stage_id = stg.stage_id
+            LEFT JOIN lifecycle_status sts ON sls.status_id = sts.status_id
+            GROUP BY 
+                s.student_number, s.student_email, s.first_name, s.last_name, 
+                s.adviser_id, a.full_name, s.graduate_on_time, s.graduate_date_term_sy, 
+                s.remarks, s.created_at, c.cohort_code, p.program_code, p.program_name;
+        """
+        df = conn.query(query, ttl=0)
     except Exception:
         df = pd.DataFrame()
     
@@ -241,12 +259,6 @@ def load_students(target_program: str) -> tuple[pd.DataFrame, str]:
     df["comprehensive_exam_display"] = df["comprehensive_exam"].apply(lambda v: map_status(v, COMPREHENSIVE_EXAM_MAP))
     df["capstone_display"] = df["capstone"].apply(lambda v: map_status(v, CAPSTONE_MAP))
 
-    # Safely handle coursework timestamp formatting
-    if "updated_at" in df.columns and df["updated_at"].notna().any():
-        df["coursework_updated_at"] = pd.to_datetime(df["updated_at"], errors="coerce").dt.strftime("%B %d, %Y at %I:%M %p").fillna("N/A")
-    else:
-        df["coursework_updated_at"] = "N/A"
-
     df["coursework_indicator"] = df["coursework_display"].apply(lambda v: get_stage_badge("coursework", v))
     df["exam_indicator"] = df["comprehensive_exam_display"].apply(lambda v: get_stage_badge("comprehensive_exam", v))
     df["capstone_indicator"] = df["capstone_display"].apply(lambda v: get_stage_badge("capstone", v))
@@ -274,13 +286,15 @@ def fetch_student_courses(student_number: int) -> pd.DataFrame:
 def fetch_student_milestones(student_number: int) -> pd.DataFrame:
     query = f"""
         SELECT 
-            milestone_type,
-            INITCAP(REPLACE(milestone_type, '_', ' ')) AS "Milestone",
-            INITCAP(status) AS "Recorded Status",
-            updated_at AS "Last Updated"
-        FROM student_milestones
-        WHERE student_number = {int(student_number)}
-        ORDER BY milestone_type ASC;
+            stg.stage_name AS milestone_type,
+            INITCAP(REPLACE(stg.stage_name, '_', ' ')) AS "Milestone",
+            INITCAP(sts.status_name) AS "Recorded Status",
+            sls.last_updated_date AS "Last Updated"
+        FROM student_lifecycle_status sls
+        JOIN lifecycle_stage stg ON sls.stage_id = stg.stage_id
+        JOIN lifecycle_status sts ON sls.status_id = sts.status_id
+        WHERE sls.student_number = {int(student_number)}
+        ORDER BY stg.stage_id ASC;
     """
     try: 
         df = conn.query(query, ttl=0)
@@ -292,7 +306,6 @@ def fetch_student_milestones(student_number: int) -> pd.DataFrame:
         return df
     except Exception: 
         return pd.DataFrame()
-    
     
 # ------------------------------------------------------------------
 # SESSION STATE MANAGEMENT
@@ -313,7 +326,6 @@ def go_to_list():
     st.session_state.page = "list"
     st.session_state.selected_student_email = None
     st.session_state.table_key_counter += 1
-
 
 # ------------------------------------------------------------------
 # VIEW: LOGIN PAGE
@@ -342,7 +354,7 @@ def render_login_page():
     )
     logo_left, logo_center, logo_right = st.columns([2, 1, 2])
     with logo_center:
-        st.image("rectangle_logo.png", width=500)  # Adjust pixel width here (e.g., 150, 180, 220)
+        st.image("rectangle_logo.png", width=500)
     st.markdown("<p style='text-align: center; color: gray;'>Project Pulse Student Management Portal</p>", unsafe_allow_html=True)
     st.divider()
 
@@ -362,18 +374,17 @@ def render_login_page():
                 if auth_record:
                     st.session_state.authenticated = True
                     st.session_state.user_info = dict(auth_record)
-                    log_security_event(auth_record["username"], auth_record["role"], "LOGIN_SUCCESS", "User authenticated.")
+                    log_security_event(auth_record["user_id"], "LOGIN_SUCCESS", "User authenticated.")
                     st.success(f"Welcome, {auth_record['full_name']}")
                     st.rerun()
                 else:
-                    log_security_event(input_username, "UNAUTHENTICATED", "LOGIN_FAILURE", "Invalid credentials provided.")
+                    log_security_event(None, "LOGIN_FAILURE", "Invalid credentials provided.")
                     st.error("Authentication failed: Invalid username or password.")
             st.caption("Default seeds: `dean_exec`, `chair_mba`, `admin_sec` | **Advisers:** `asmith`, `bjones`, `cbrown`, `dprince` (Password: `Password123!`)")
 
 if not st.session_state.authenticated:
     render_login_page()
     st.stop()
-
 
 # ------------------------------------------------------------------
 # AUTHENTICATED USER HEADER & NAVIGATION
@@ -393,22 +404,18 @@ if user["role"] == "IT/Admin":
 else:
     st.session_state.admin_view = "Dashboard"
 
-# --- ROBUST CSS FOR RED LOG OUT BUTTON ---
 st.markdown(
     """
     <style>
-    /* Target all buttons inside the sidebar container */
     section[data-testid="stSidebar"] button {
         background-color: #b92b27 !important;
         color: white !important;
         border-color: #b92b27 !important;
     }
-    /* Force text elements inside the sidebar button to be white */
     section[data-testid="stSidebar"] button p, 
     section[data-testid="stSidebar"] button span {
         color: white !important;
     }
-    /* Hover state */
     section[data-testid="stSidebar"] button:hover {
         background-color: #FF4B4B !important;
         color: white !important;
@@ -427,15 +434,14 @@ if st.sidebar.button("Log Out", use_container_width=True):
   st.rerun()
 
 st.sidebar.markdown("---")
-
-# --- SIDEBAR CONTROLS ---
 with st.sidebar:
-        st.write("") # Optional spacing
+        st.write("") 
         if st.button("RE-SYNC", use_container_width=True):
             load_students.clear()
             fetch_student_courses.clear()
             fetch_student_milestones.clear()
             st.rerun()
+
 # ------------------------------------------------------------------
 # STYLED BANNER HEADER
 # ------------------------------------------------------------------
@@ -467,7 +473,6 @@ st.markdown(f"""
     </div>
 """, unsafe_allow_html=True)
 
-
 # ------------------------------------------------------------------
 # VIEW: IT/ADMIN GLOBAL INSTANCE CONFIGURATION
 # ------------------------------------------------------------------
@@ -476,7 +481,7 @@ def render_instance_settings():
     st.caption("Set the primary context for this dashboard instance. These settings apply globally to all users.")
 
     try:
-        prog_df = conn.query("SELECT DISTINCT program_code FROM students_normalized WHERE program_code IS NOT NULL AND program_code != '';", ttl=0)
+        prog_df = conn.query("SELECT DISTINCT program_code FROM program WHERE program_code IS NOT NULL AND program_code != '';", ttl=0)
         available_programs = sorted(prog_df["program_code"].unique().tolist())
     except Exception as e:
         st.error(f"Failed to load program list from database: {e}")
@@ -495,18 +500,21 @@ def render_instance_settings():
             try:
                 with conn.session as s:
                     s.execute(
-                        text("UPDATE dashboard_config SET active_program = :ap WHERE id = 1;"),
+                        text("""
+                            UPDATE dashboard_config 
+                            SET program_id = (SELECT program_id FROM program WHERE program_code = :ap) 
+                            WHERE config_id = 1;
+                        """),
                         {"ap": selected_program.strip()}
                     )
                     s.commit()
-                log_security_event(user["username"], user["role"], "INSTANCE_CONFIG_UPDATED", f"Changed program to {selected_program}.")
+                log_security_event(user["user_id"], "INSTANCE_CONFIG_UPDATED", f"Changed program to {selected_program}.")
                 st.success("Global settings updated successfully! The dashboard will now automatically filter to the new program context.")
                 load_dashboard_config.clear()
                 load_students.clear()
                 st.rerun()
             except Exception as e:
                 st.error(f"Error updating configuration: {e}")
-
 
 # ------------------------------------------------------------------
 # VIEW: IT/ADMIN SCHEMA CONFIGURATION
@@ -516,7 +524,16 @@ def render_schema_mapping():
     st.caption("Map dashboard UI elements directly to the underlying SQL database columns. No code deployment required.")
 
     try:
-        actual_cols_df = conn.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'students';", ttl=0)
+        actual_cols_df = conn.query("""
+            SELECT column_name FROM information_schema.columns WHERE table_name = 'students_normalized'
+            UNION SELECT 'cohort' 
+            UNION SELECT 'program_code'
+            UNION SELECT 'program_name'
+            UNION SELECT 'coursework_status'
+            UNION SELECT 'comprehensive_exam'
+            UNION SELECT 'capstone'
+            UNION SELECT 'updated_at';
+        """, ttl=0)
         actual_db_cols = actual_cols_df["column_name"].tolist()
         mappings_df = conn.query("SELECT id, dashboard_field, db_column, description FROM field_mappings ORDER BY id;", ttl=0)
     except Exception as e:
@@ -556,20 +573,18 @@ def render_schema_mapping():
                             {"col": row["db_column"], "idx": int(row["id"])}
                         )
                     s.commit()
-                log_security_event(user["username"], user["role"], "SCHEMA_MAPPING_UPDATED", "IT Admin modified database schema mappings.")
+                log_security_event(user["user_id"], "SCHEMA_MAPPING_UPDATED", "IT Admin modified database schema mappings.")
                 st.success("Schema mappings successfully committed to database!")
                 load_students.clear()
                 st.rerun()
             except Exception as e:
                 st.error(f"Error saving mappings: {e}")
 
-
 # ------------------------------------------------------------------
 # VIEW: IT/ADMIN PERMISSION MANAGEMENT & AUDIT LOGS
 # ------------------------------------------------------------------
 def render_permissions_and_logs():
     st.subheader("🔐 Access Management & Security Audit Logs")
-    
     t_perms, t_logs, t_syslogs = st.tabs(["User Permissions", "Live Audit Logs", "System Sync Failures"])
     
     with t_perms:
@@ -589,7 +604,7 @@ def render_permissions_and_logs():
                             {"ce": new_can_edit, "u": target_username}
                         )
                         s.commit()
-                    log_security_event(user["username"], user["role"], "PERMISSIONS_UPDATED", f"Set can_edit={new_can_edit} for user '{target_username}'.")
+                    log_security_event(user["user_id"], "PERMISSIONS_UPDATED", f"Set can_edit={new_can_edit} for user '{target_username}'.")
                     st.success(f"Permissions successfully updated for {target_username}.")
                     st.rerun()
                 except Exception as ex:
@@ -598,9 +613,13 @@ def render_permissions_and_logs():
     with t_logs:
         with t_logs:
             st.caption("Live monitoring of authentication events, schema updates, and blocked write attempts.")
-        logs_df = conn.query("SELECT timestamp, username, role, event_type, details FROM audit_logs ORDER BY timestamp DESC LIMIT 100;", ttl=0)
+        logs_df = conn.query("""
+            SELECT al.timestamp, COALESCE(u.username, 'UNKNOWN') AS username, COALESCE(u.role, 'UNAUTHENTICATED') AS role, al.event_type, al.details 
+            FROM audit_logs al
+            LEFT JOIN app_users u ON al.user_id = u.user_id
+            ORDER BY al.timestamp DESC LIMIT 100;
+        """, ttl=0)
         
-        # Convert DB UTC timestamps to Asia/Manila timezone
         if not logs_df.empty and "timestamp" in logs_df.columns:
             dt = pd.to_datetime(logs_df["timestamp"], errors="coerce")
             if dt.dt.tz is None:
@@ -611,6 +630,8 @@ def render_permissions_and_logs():
             logs_df,
             column_config={
                 "timestamp": st.column_config.DatetimeColumn("Timestamp", format="MMM DD, YYYY HH:mm:ss"),
+                "username": st.column_config.TextColumn("Username"),
+                "role": st.column_config.TextColumn("Role"),
                 "event_type": st.column_config.TextColumn("Event Type"),
                 "details": st.column_config.TextColumn("Log Details", width="large")
             },
@@ -636,25 +657,20 @@ def render_permissions_and_logs():
         else:
             st.success("✅ System is healthy. No synchronization errors logged.")
 
-
 def render_completion_trend_chart(df_all, active_program):
     if df_all.empty:
         st.info("No data available to display completion trends.")
         return
-
-    # Calculate completion rate directly from the loaded dataframe
     df_all['is_completed'] = df_all['coursework_display'] == 'Completed'
-    
     trend_df = df_all.groupby('cohort').agg(
         total_students=('coursework_display', 'count'),
         completed_students=('is_completed', 'sum')
     ).reset_index()
     
     trend_df['completion_rate'] = (trend_df['completed_students'] / trend_df['total_students']) * 100
-    
-    # Sort the Mapúa Term Formats Chronologically (e.g. 1T2425)
-    trend_df['sort_year'] = trend_df['cohort'].astype(str).str.extract(r'T(\d{2})').astype(float)
-    trend_df['sort_term'] = trend_df['cohort'].astype(str).str.extract(r'^(\d)T').astype(float)
+    # Sort the Mapúa Term/Quarter Formats Chronologically (e.g. 1T2425 or 1Q2425)
+    trend_df['sort_year'] = trend_df['cohort'].astype(str).str.extract(r'[TQ](\d{2})').astype(float)
+    trend_df['sort_term'] = trend_df['cohort'].astype(str).str.extract(r'^(\d)[TQ]').astype(float)
     
     trend_df = trend_df.dropna(subset=['sort_year', 'sort_term']).sort_values(by=['sort_year', 'sort_term']).tail(4) 
     
@@ -662,12 +678,8 @@ def render_completion_trend_chart(df_all, active_program):
         st.info("Not enough standard cohort terms (e.g., 1T2425) to form a trend line.")
         return
 
-    # Render the Chart
     fig = px.line(
-        trend_df, 
-        x="cohort", 
-        y="completion_rate", 
-        markers=True,
+        trend_df, x="cohort", y="completion_rate", markers=True,
         labels={"cohort": "Academic Term", "completion_rate": "Completion Rate (%)"}
     )
     
@@ -681,7 +693,6 @@ def render_completion_trend_chart(df_all, active_program):
     )
     fig.update_traces(line_color="#1E88E5", line_width=3, marker_size=8)
     
-    # Draw Subheader and Chart
     st.subheader(f"Completion Trend — Last 4 Terms", help="Shows the percentage of students in each cohort who have successfully completed all core coursework.")
     st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
@@ -689,28 +700,21 @@ def render_completion_trend_chart(df_all, active_program):
 # VIEW 1: STUDENT ROSTER (Dashboard)
 # ------------------------------------------------------------------
 def render_student_list(df_all):
-    # --- PRE-READ FILTER STATE ---
-    # Because the filter dropdowns are visually located below the summary,
-    # we use Streamlit's session state to read the selected cohort early.
     active_cohort = st.session_state.get("cohort_filter", "All")
     
-    # Format "1T2425" into "1T, A.Y. 2024-2025" dynamically
-    if active_cohort == "All":
+    if active_cohort == "All": 
         summary_label = "All Cohorts"
-    elif len(active_cohort) == 6 and active_cohort[1] == 'T':
-        term = active_cohort[0]
+    elif len(active_cohort) == 6 and active_cohort[1] in ['T', 'Q']:
+        term_num = active_cohort[0]
+        term_type = active_cohort[1]  # Captures 'T' or 'Q' dynamically
         y1 = active_cohort[2:4]
         y2 = active_cohort[4:6]
-        summary_label = f"{term}T, A.Y. 20{y1}–20{y2}"
-    else:
+        summary_label = f"{term_num}{term_type}, A.Y. 20{y1}–20{y2}"
+    else: 
         summary_label = active_cohort
 
-    # --------------------------------------------------------------
-    # 1. DYNAMIC EXECUTIVE SUMMARY
-    # --------------------------------------------------------------
     st.markdown(f"#### Executive Summary — {summary_label}")
     
-    # Dynamically filter the KPIs so the Executive Summary matches the selection
     df_summary = df_all.copy()
     if active_cohort != "All":
         df_summary = df_summary[df_summary["cohort"].astype(str) == active_cohort]
@@ -726,7 +730,6 @@ def render_student_list(df_all):
         (~df_summary["graduate_on_time"].astype(str).str.lower().isin(["n/a", "none"]))
     ]
     grad_numerator = len(evaluated_df[evaluated_df["graduate_on_time"].astype(str).str.lower().isin(["yes", "y", "true", "1"])])
-    
     grad_denominator = total_students
     on_time_rate = (grad_numerator / grad_denominator * 100) if grad_denominator > 0 else 0.0
 
@@ -744,36 +747,13 @@ def render_student_list(df_all):
     missing_exam = len(df_summary[df_summary["comprehensive_exam_display"] != "Passed"])
     missing_capstone = len(df_summary[df_summary["capstone_display"] != "Defended for Completion"])
 
-    # --- ROW 1: Raw Milestone Counts ---
     top_c1, top_c2, top_c3, top_c4 = st.columns(4)
-    
-    top_c1.metric(
-        label="Total Students", 
-        value=total_students,
-        help="The total number of enrolled students matching the current filters."
-    )
-    
-    top_c2.metric(
-        label="Coursework", 
-        value=cw_completed,
-        help="Total students who have fully completed all required core coursework."
-    )
-    
-    top_c3.metric(
-        label="Comprehensive Exam", 
-        value=exam_passed,
-        help="Total students who have successfully passed the Comprehensive Examination."
-    )
-    
-    top_c4.metric(
-        label="Capstones", 
-        value=capstone_defended,
-        help="Total students who have successfully defended and finalized their Capstone project."
-    )
-
+    top_c1.metric(label="Total Students", value=total_students, help="Total students matching filters.")
+    top_c2.metric(label="Coursework", value=cw_completed, help="Completed required core coursework.")
+    top_c3.metric(label="Comprehensive Exam", value=exam_passed, help="Passed Comprehensive Examination.")
+    top_c4.metric(label="Capstones", value=capstone_defended, help="Defended and finalized Capstone project.")
     st.write("")
 
-    # --- ROW 2: Executive Percentages in Styled Cards ---
     st.markdown(
         """
         <style>
@@ -802,47 +782,20 @@ def render_student_list(df_all):
         unsafe_allow_html=True
     )
 
-    # Determine dynamic delta formatting based on the >= 50% threshold
     grad_delta_str = f"{grad_numerator} of {total_students} total students"
-    if on_time_rate < 50:
-        grad_delta_str = f"- {grad_numerator} of {total_students} total students"
+    if on_time_rate < 50: grad_delta_str = f"- {grad_numerator} of {total_students} total students"
 
     comp_delta_str = f"{fully_completed} out of {total_students} students"
-    if completion_rate < 50:
-        comp_delta_str = f"- {fully_completed} out of {total_students} students"
+    if completion_rate < 50: comp_delta_str = f"- {fully_completed} out of {total_students} students"
 
     bot_c1, bot_c2, bot_c3 = st.columns(3)
-        
-    # Determine color mode based on the 50% threshold
     grad_color_mode = "normal" if on_time_rate >= 50 else "inverse"
     comp_color_mode = "normal" if completion_rate >= 50 else "inverse"
 
-    bot_c1.metric(
-            label="On-Time Grad Rate", 
-            value=f"{on_time_rate:.1f}%", 
-            delta=f"{grad_numerator} out of {total_students} students",
-            delta_color=grad_color_mode,
-            help=f"**Calculation Logic:**\n\n*Numerator:* Students flagged as graduating on time ({grad_numerator})\n*Denominator:* Total students in the cohort ({total_students})\n*Period:* {summary_label}"
-        )
-
-    bot_c2.metric(
-            label="Overall Completion",
-            value=f"{completion_rate}%",
-            delta=f"{fully_completed} out of {total_students} students",
-            delta_color=comp_color_mode,
-            help="Percentage of the active cohort that has completed coursework, passed the comprehensive exam, and defended the capstone."
-        )
-
-    bot_c3.metric(
-            label="Remaining Students",
-            value=remaining_students,
-            delta=None,
-            help=f"**Pending Milestones (Absolute):**\n\n* **{missing_coursework}** needing Coursework\n* **{missing_exam}** needing Comprehensive Exam\n* **{missing_capstone}** needing Capstone Defense\n\n*(Total active cohort minus fully completed)*"
-        )
+    bot_c1.metric(label="On-Time Grad Rate", value=f"{on_time_rate:.1f}%", delta=f"{grad_numerator} out of {total_students} students", delta_color=grad_color_mode)
+    bot_c2.metric(label="Overall Completion", value=f"{completion_rate}%", delta=f"{fully_completed} out of {total_students} students", delta_color=comp_color_mode)
+    bot_c3.metric(label="Remaining Students", value=remaining_students, delta=None)
     
-    # --------------------------------------------------------------
-    # 2. CHARTS (Lifecycle & Trend)
-    # --------------------------------------------------------------
     col1, col2 = st.columns(2)
 
     with col1:
@@ -850,65 +803,44 @@ def render_student_list(df_all):
         with title_col: title_placeholder = st.empty()
         with clear_col: clear_placeholder = st.empty()
 
-        # Add the toggle directly above the chart
-        chart_view = st.radio(
-            "Lifecycle Metrics View", 
-            ["Accomplished", "Pending"], 
-            horizontal=True, 
-            label_visibility="collapsed"
-        )
+        chart_view = st.radio("Lifecycle Metrics View", ["Accomplished", "Pending"], horizontal=True, label_visibility="collapsed")
 
-        # Feed the chart data based on the toggle state
         if chart_view == "Accomplished":
             stage_counts = [cw_completed, exam_passed, capstone_defended]
-            help_text = "Shows the absolute number and percentage of students who have successfully accomplished each lifecycle milestone."
+            help_text = "Absolute number and percentage of students who accomplished each milestone."
         else:
             stage_counts = [missing_coursework, missing_exam, missing_capstone]
-            help_text = "Shows the absolute number and percentage of students who have not yet completed each lifecycle milestone."
+            help_text = "Absolute number and percentage of students who have not yet completed each milestone."
 
         stage_df = pd.DataFrame({
             "Lifecycle Stage": ["Coursework", "Comprehensive Exam", "Capstone"],
             "Students": stage_counts
         })
 
-        if total_students > 0:
-            stage_df["Percentage"] = (stage_df["Students"] / total_students * 100)
-        else:
-            stage_df["Percentage"] = 0.0
+        if total_students > 0: stage_df["Percentage"] = (stage_df["Students"] / total_students * 100)
+        else: stage_df["Percentage"] = 0.0
 
         fig = px.bar(
-            stage_df,
-            x="Percentage",
-            y="Lifecycle Stage",
-            orientation="h",
-            text="Percentage",
-            custom_data=["Students"],
-            range_x=[0, 100],
+            stage_df, x="Percentage", y="Lifecycle Stage", orientation="h",
+            text="Percentage", custom_data=["Students"], range_x=[0, 100],
             labels={"Percentage": f"Percentage of Active Students ({chart_view})", "Lifecycle Stage": ""}
         )
 
         fig.update_traces(
-            marker_color=["#0072B2", "#FFAE00", "#D50000"],
-            texttemplate="%{text:.2f}%",
-            textposition="outside",
-            hovertemplate="<b>%{y}</b><br>Students: %{customdata[0]}<extra></extra>"
+            marker_color=["#0072B2", "#FFAE00", "#D50000"], texttemplate="%{text:.2f}%",
+            textposition="outside", hovertemplate="<b>%{y}</b><br>Students: %{customdata[0]}<extra></extra>"
         )
 
         fig.update_layout(
-            height=250,
-            margin=dict(l=10, r=40, t=10, b=10),
+            height=250, margin=dict(l=10, r=40, t=10, b=10),
             xaxis=dict(range=[0, 100], ticksuffix="%", dtick=20, fixedrange=True),
             yaxis=dict(categoryorder="array", categoryarray=["Capstone", "Comprehensive Exam", "Coursework"], fixedrange=True),
             showlegend=False
         )
 
         chart_event = st.plotly_chart(
-            fig,
-            width="stretch",
-            config={"displayModeBar": False},
-            on_select="rerun",
-            selection_mode="points",
-            key=f"lifecycle_chart_{st.session_state.chart_key_counter}"
+            fig, width="stretch", config={"displayModeBar": False},
+            on_select="rerun", selection_mode="points", key=f"lifecycle_chart_{st.session_state.chart_key_counter}"
         )
 
         if chart_event and chart_event.selection:
@@ -917,12 +849,10 @@ def render_student_list(df_all):
                 clicked_stage = selected_points[0].get("y")
                 if clicked_stage in ["Coursework", "Comprehensive Exam", "Capstone"]:
                     st.session_state.drill_stage = clicked_stage
-            else:
-                st.session_state.drill_stage = None
+            else: st.session_state.drill_stage = None
 
         chart_title = "Lifecycle Stage Breakdown"
-        if st.session_state.drill_stage:
-            chart_title += f" — {st.session_state.drill_stage}"
+        if st.session_state.drill_stage: chart_title += f" — {st.session_state.drill_stage}"
 
         title_placeholder.subheader(chart_title, help=help_text)
 
@@ -933,29 +863,20 @@ def render_student_list(df_all):
                 st.rerun()
 
     with col2:
-        # Pass df_all (unfiltered) so the trend line ALWAYS shows historical multi-term context!
         render_completion_trend_chart(df_all, ACTIVE_PROGRAM)
 
     st.divider()
 
-    # --------------------------------------------------------------
-    # 3. STUDENT ROSTER & FILTERING (Widgets stay below charts)
-    # --------------------------------------------------------------
     roster_title = f"Student Roster & Lifecycle Progress ({ACTIVE_PROGRAM})"
-    if st.session_state.drill_stage:
-        roster_title += f" — {st.session_state.drill_stage}"
+    if st.session_state.drill_stage: roster_title += f" — {st.session_state.drill_stage}"
     st.subheader(roster_title)
     
     search_col, cohort_col, adv_col, sort_col = st.columns([2, 1, 1.2, 1])
     
-    with search_col: 
-        search_term = st.text_input("Search by name or student ID", placeholder="e.g. Adrian Santos or 2026124837")
-        
+    with search_col: search_term = st.text_input("Search by name or student ID", placeholder="e.g. Adrian Santos or 2026124837")
     with cohort_col:
         valid_cohorts = sorted([str(c) for c in df_all["cohort"].dropna().unique().tolist()])
-        # NOTE the key="cohort_filter" here. This is the engine that drives the session state!
         selected_cohort = st.selectbox("Filter by cohort", ["All"] + valid_cohorts, key="cohort_filter")
-        
     with adv_col:
         valid_advisers = sorted([str(a) for a in df_all["adviser"].dropna().unique().tolist() if str(a).strip()])
         current_user = st.session_state.user_info.get("full_name", "")
@@ -967,33 +888,21 @@ def render_student_list(df_all):
         else:
             default_idx = valid_advisers.index(current_user) + 1 if current_user in valid_advisers else 0
             selected_adviser = st.selectbox("Filter by Adviser", ["All"] + valid_advisers, index=default_idx)
+    with sort_col: sort_option = st.selectbox("Sort by", ["Name", "Student ID", "Overall Status"])
 
-    with sort_col:
-        sort_option = st.selectbox("Sort by", ["Name", "Student ID", "Overall Status"])
+    filtered = df_summary.copy()
 
-    # --- APPLY REMAINING FILTERS TO THE DATAFRAME ---
-    filtered = df_summary.copy() # Start from the already cohort-filtered dataframe!
-
-    if selected_adviser != "All":
-        filtered = filtered[filtered["adviser"].astype(str) == selected_adviser]
+    if selected_adviser != "All": filtered = filtered[filtered["adviser"].astype(str) == selected_adviser]
 
     if st.session_state.drill_stage == "Coursework":
-        if chart_view == "Accomplished":
-            filtered = filtered[filtered["coursework_display"] == "Completed"]
-        else:
-            filtered = filtered[filtered["coursework_display"] != "Completed"]
-            
+        if chart_view == "Accomplished": filtered = filtered[filtered["coursework_display"] == "Completed"]
+        else: filtered = filtered[filtered["coursework_display"] != "Completed"]
     elif st.session_state.drill_stage == "Comprehensive Exam":
-        if chart_view == "Accomplished":
-            filtered = filtered[filtered["comprehensive_exam_display"] == "Passed"]
-        else:
-            filtered = filtered[filtered["comprehensive_exam_display"] != "Passed"]
-            
+        if chart_view == "Accomplished": filtered = filtered[filtered["comprehensive_exam_display"] == "Passed"]
+        else: filtered = filtered[filtered["comprehensive_exam_display"] != "Passed"]
     elif st.session_state.drill_stage == "Capstone":
-        if chart_view == "Accomplished":
-            filtered = filtered[filtered["capstone_display"] == "Defended for Completion"]
-        else:
-            filtered = filtered[filtered["capstone_display"] != "Defended for Completion"]
+        if chart_view == "Accomplished": filtered = filtered[filtered["capstone_display"] == "Defended for Completion"]
+        else: filtered = filtered[filtered["capstone_display"] != "Defended for Completion"]
 
     if search_term:
         term = search_term.strip().lower()
@@ -1005,9 +914,6 @@ def render_student_list(df_all):
     sort_map = {"Name": "full_name", "Student ID": "student_number", "Overall Status": "overall_status"}
     filtered = filtered.sort_values(sort_map[sort_option]).reset_index(drop=True)
 
-    # --------------------------------------------------------------
-    # 4. STUDENT ROSTER TABLE
-    # --------------------------------------------------------------
     if filtered.empty:
         if selected_adviser == current_user and not search_term and selected_cohort == "All" and not st.session_state.drill_stage:
             st.info(f"You currently have no advisees assigned to you in the {ACTIVE_PROGRAM} program.")
@@ -1038,8 +944,7 @@ def render_student_list(df_all):
         "comprehensive_exam_display": "Comprehensive Exam", "capstone_display": "Capstone", "adviser": "Adviser"
     })
 
-    def style_bold_name(series):
-        return ["font-weight: bold;" for _ in series]
+    def style_bold_name(series): return ["font-weight: bold;" for _ in series]
 
     styled_df = (
         display_df.style
@@ -1049,25 +954,13 @@ def render_student_list(df_all):
         .apply(make_status_styler("capstone"), subset=["Capstone"])
     )
 
-   # --- CSV EXPORT & AUDIT LOGGING ---
     def log_csv_export():
         user = st.session_state.user_info
-        log_security_event(
-            user["username"], 
-            user["role"], 
-            "DATA_EXPORT", 
-            f"Exported {len(display_df)} filtered student records to CSV."
-        )
+        log_security_event(user["user_id"], "DATA_EXPORT", f"Exported {len(display_df)} filtered student records to CSV.")
 
     table_key = f"student_table_{st.session_state.table_key_counter}"
-    
     event = st.dataframe(
-        styled_df,
-        key=table_key,
-        hide_index=True,
-        width="stretch",
-        on_select="rerun",
-        selection_mode="single-cell",
+        styled_df, key=table_key, hide_index=True, width="stretch", on_select="rerun", selection_mode="single-cell",
         column_config={
             "Name": st.column_config.TextColumn("Student Name", width="medium"),
             "Student ID": st.column_config.TextColumn("Student ID", width="small"),
@@ -1091,7 +984,6 @@ def render_student_list(df_all):
             go_to_profile(selected_email)
             st.rerun()
 
-    # Align the button to the right side BELOW the table
     col_empty, col_export = st.columns([5, 1])
     with col_export:
         st.download_button(
@@ -1141,10 +1033,8 @@ def render_student_profile(df_all):
     cap_updated = "N/A"
     if not milestones_df.empty:
         for _, m_row in milestones_df.iterrows():
-            if m_row.get("milestone_type") == "comprehensive_exam":
-                ce_updated = m_row.get("Last Updated", "N/A")
-            elif m_row.get("milestone_type") == "capstone":
-                cap_updated = m_row.get("Last Updated", "N/A")
+            if m_row.get("milestone_type") == "comprehensive_exam": ce_updated = m_row.get("Last Updated", "N/A")
+            elif m_row.get("milestone_type") == "capstone": cap_updated = m_row.get("Last Updated", "N/A")
 
     cw_updated = student.get('coursework_updated_at', 'N/A')
 
@@ -1154,21 +1044,21 @@ def render_student_profile(df_all):
             st.markdown("**📚 Coursework Stage**")
             st.markdown(student["coursework_indicator"], unsafe_allow_html=True)
             st.caption(f"Status: {student['coursework_display']}")
-            st.caption(f"🕒 Last Updated: `{cw_updated}`") # <--- Added coursework timestamp
+            st.caption(f"🕒 Last Updated: `{cw_updated}`")
             
     with p2:
         with st.container(border=True):
             st.markdown("**📝 Comprehensive Examination**")
             st.markdown(student["exam_indicator"], unsafe_allow_html=True)
             st.caption(f"Status: {student['comprehensive_exam_display']}")
-            st.caption(f"🕒 Last Updated: `{ce_updated}`") # <--- Added comprehensive exam timestamp
+            st.caption(f"🕒 Last Updated: `{ce_updated}`")
             
     with p3:
         with st.container(border=True):
             st.markdown("**🎓 Capstone & Defense**")
             st.markdown(student["capstone_indicator"], unsafe_allow_html=True)
             st.caption(f"Adviser: **{student.get('adviser') or 'Unassigned'}**")
-            st.caption(f"🕒 Last Updated: `{cap_updated}`") # <--- Added capstone timestamp
+            st.caption(f"🕒 Last Updated: `{cap_updated}`")
 
     st.divider()
     tab_courses, tab_milestones, tab_remarks = st.tabs(["📖 Course Progress", "🚩 Lifecycle Milestones", "📝 Remarks & Admin Actions"])
@@ -1183,7 +1073,7 @@ def render_student_profile(df_all):
         st.markdown("##### Milestone Clearances")
         milestones_df = fetch_student_milestones(student["student_number"])
         if not milestones_df.empty: st.dataframe(milestones_df, hide_index=True, use_container_width=True)
-        else: st.info("No milestone events recorded in `student_milestones`.")
+        else: st.info("No milestone events recorded in `student_lifecycle_status`.")
 
     with tab_remarks:
         st.markdown("##### Graduation Tracking & Advisor Notes")
@@ -1233,11 +1123,16 @@ def render_student_profile(df_all):
 
             if submitted:
                 if not is_authorized_editor:
-                    log_security_event(user["username"], user["role"], "UNAUTHORIZED_WRITE_ATTEMPT", f"Blocked attempt to update record for Student ID {student['student_number']} without edit permissions.")
+                    log_security_event(user["user_id"], "UNAUTHORIZED_WRITE_ATTEMPT", f"Blocked attempt to update record for Student ID {student['student_number']} without edit permissions.")
                     st.error("⛔ Access Denied: Your account role is View-Only. This unauthorized attempt has been logged.")
                 else:
+                    cw_db_map = {"Pending": "pending", "Completed": "completed", "Cancelled": "cancelled"}
                     ce_db_map = {"Passed": "done", "In-Progress": "not yet taken", "Incomplete": "incomplete"}
                     cap_db_map = {"Defended for Completion": "done", "In-Progress": "not yet done", "Incomplete": "incomplete"}
+                    
+                    cw_val = cw_db_map.get(new_cw, "pending")
+                    ce_val = ce_db_map.get(new_ce, "incomplete")
+                    cap_val = cap_db_map.get(new_cap, "incomplete")
                     
                     try:
                         with conn.session as s:
@@ -1246,44 +1141,36 @@ def render_student_profile(df_all):
                                 adv_res = s.execute(text("SELECT adviser_id FROM advisers WHERE full_name = :name"), {"name": new_adv}).fetchone()
                                 if adv_res: adv_id = adv_res[0]
                                     
-                            # Update coursework with current timestamp (NOW())
+                            # Update base details on normalized student table
                             s.execute(
                                 text("""
                                     UPDATE students_normalized 
-                                    SET coursework_status = :cw, 
-                                        remarks = :rem,
-                                        adviser_id = :adv,
-                                        updated_at = NOW()
+                                    SET remarks = :rem, adviser_id = :adv
                                     WHERE student_number = :sn;
                                 """),
-                                {"cw": new_cw.upper(), "rem": new_remarks, "adv": adv_id, "sn": int(student["student_number"])}
+                                {"rem": new_remarks, "adv": adv_id, "sn": int(student["student_number"])}
                             )
                             
-                            # Update or Insert comprehensive exam milestone with current timestamp
-                            s.execute(
-                                text("""
-                                    INSERT INTO student_milestones (student_number, milestone_type, status, updated_at) 
-                                    VALUES (:sn, 'comprehensive_exam', :st, NOW()) 
-                                    ON CONFLICT (student_number, milestone_type) 
-                                    DO UPDATE SET status = EXCLUDED.status, updated_at = NOW();
-                                """),
-                                {"sn": int(student["student_number"]), "st": ce_db_map.get(new_ce, "incomplete")}
-                            )
+                            # Helper block to execute lifecycle upserts cleanly
+                            upsert_sql = text("""
+                                INSERT INTO student_lifecycle_status (student_number, stage_id, status_id, last_updated_date)
+                                VALUES (
+                                    :sn, 
+                                    (SELECT stage_id FROM lifecycle_stage WHERE stage_name = :stage_name),
+                                    (SELECT status_id FROM lifecycle_status WHERE status_name = :status_name),
+                                    NOW()
+                                )
+                                ON CONFLICT (student_number, stage_id) 
+                                DO UPDATE SET status_id = EXCLUDED.status_id, last_updated_date = NOW();
+                            """)
                             
-                            # Update or Insert capstone milestone with current timestamp
-                            s.execute(
-                                text("""
-                                    INSERT INTO student_milestones (student_number, milestone_type, status, updated_at) 
-                                    VALUES (:sn, 'capstone', :st, NOW()) 
-                                    ON CONFLICT (student_number, milestone_type) 
-                                    DO UPDATE SET status = EXCLUDED.status, updated_at = NOW();
-                                """),
-                                {"sn": int(student["student_number"]), "st": cap_db_map.get(new_cap, "incomplete")}
-                            )
+                            s.execute(upsert_sql, {"sn": int(student["student_number"]), "stage_name": "coursework", "status_name": cw_val})
+                            s.execute(upsert_sql, {"sn": int(student["student_number"]), "stage_name": "comprehensive_exam", "status_name": ce_val})
+                            s.execute(upsert_sql, {"sn": int(student["student_number"]), "stage_name": "capstone", "status_name": cap_val})
                             
                             s.commit()
                         
-                        log_security_event(user["username"], user["role"], "STUDENT_RECORD_UPDATED", f"Modified record for Student ID {student['student_number']} (CW: {new_cw}, Exam: {new_ce}, Capstone: {new_cap}).")
+                        log_security_event(user["user_id"], "STUDENT_RECORD_UPDATED", f"Modified record for Student ID {student['student_number']} (CW: {new_cw}, Exam: {new_ce}, Capstone: {new_cap}).")
                         st.success("Record successfully updated in Supabase!")
                         load_students.clear()
                         fetch_student_milestones.clear()
@@ -1292,23 +1179,19 @@ def render_student_profile(df_all):
                     except Exception as err:
                         st.error(f"Write operation failed: {err}")
 
-
 # ------------------------------------------------------------------
 # FOOTER HELPER
 # ------------------------------------------------------------------
 def render_footer(last_sync_time):
-    # REPLACE datetime.now() WITH ZoneInfo:
     current_render_time = datetime.now(ZoneInfo("Asia/Manila")).strftime("%B %d, %Y %I:%M %p")
-    
     st.divider()
     st.markdown(
         f"<div style='text-align: center; color: gray; font-size: 0.8rem; line-height: 1.6; padding-bottom: 20px;'>"
-        f"Mapúa University · ETYSB Success Advisor Dashboard · Streamlit build for OBE Agile Pilot Sprint Review<br>"
+        f"Mapúa University · ETYSB Success Advisor Dashboard<br>"
         f"Data source: Supabase (Live Normalized DB) · Data last synced: <b>{last_sync_time}</b> · Rendered <b>{current_render_time}</b>."
         f"</div>",
         unsafe_allow_html=True
     )
-
 
 # ------------------------------------------------------------------
 # MASTER ROUTER (With Sync Error Handling)
@@ -1324,25 +1207,16 @@ elif st.session_state.admin_view == "Permissions & Audit Logs":
     render_permissions_and_logs()
 else:
     try:
-        # Step A: Fetch dataset and synchronization timestamp
         df_all, last_sync = load_students(ACTIVE_PROGRAM)
-        
         st.session_state.consecutive_sync_failures = 0
         st.caption(f"🕒 **Data Last Synchronized:** `{last_sync}`")
         
-        # Step B: Render the active page based on session state
-        if st.session_state.page == "profile" and st.session_state.selected_student_email:
-            render_student_profile(df_all)
-        else:
-            render_student_list(df_all)
+        if st.session_state.page == "profile" and st.session_state.selected_student_email: render_student_profile(df_all)
+        else: render_student_list(df_all)
 
-        # Step C: The Footer Call
-        # Placed here so it runs after the main content, regardless of 
-        # whether the user is on the list view or a specific student's profile.
         render_footer(last_sync)
 
     except Exception as e:
-        # If anything in Step A, B, or C fails, catch and log it gracefully
         st.session_state.consecutive_sync_failures += 1
         error_msg = str(e)
         
