@@ -1242,7 +1242,7 @@ def render_student_list(df_all):
                 st.info(f"No results found for the {ACTIVE_PROGRAM} program matching your specific filters.")
             return
 
-                display_df = format_for_grid(filtered)
+        display_df = format_for_grid(filtered)
 
         # CSV export must be created AFTER display_df has been prepared
         def log_csv_export():
