@@ -1187,23 +1187,10 @@ def render_student_list(df_all):
         roster_title = f"Student Roster & Lifecycle Progress ({ACTIVE_PROGRAM})"
         if st.session_state.drill_stage: roster_title += f" — {st.session_state.drill_stage}"
         
-        # Top Header: Title on the left, Export button on the right
+        # Top Header: Title
         top_left_col, top_right_col = st.columns([4, 1], vertical_alignment="bottom")
         with top_left_col:
             st.subheader(roster_title)
-        with top_right_col:
-            def log_csv_export():
-                if st.session_state.user_info:
-                    log_security_event(st.session_state.user_info["user_id"], "DATA_EXPORT", f"Exported {ACTIVE_PROGRAM} student roster to CSV.")
-
-            st.download_button(
-                label="📥 Export CSV",
-                data=display_df.to_csv(index=False).encode('utf-8') if 'display_df' in locals() else "",
-                file_name=f"{ACTIVE_PROGRAM}_roster_export.csv",
-                mime="text/csv",
-                on_click=log_csv_export,
-                use_container_width=True
-            )
         
         search_col, cohort_col, adv_col, sort_col = st.columns([2, 1, 1.2, 1])
         
@@ -1255,9 +1242,27 @@ def render_student_list(df_all):
                 st.info(f"No results found for the {ACTIVE_PROGRAM} program matching your specific filters.")
             return
 
-        display_df = format_for_grid(filtered)
+                display_df = format_for_grid(filtered)
+
+        # CSV export must be created AFTER display_df has been prepared
+        def log_csv_export():
+            if st.session_state.user_info:
+                log_security_event(
+                    st.session_state.user_info["user_id"],
+                    "DATA_EXPORT",
+                    f"Exported {ACTIVE_PROGRAM} student roster to CSV."
+                )
+
+        top_right_col.download_button(
+            label="📥 Export CSV",
+            data=display_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"{ACTIVE_PROGRAM}_roster_export.csv",
+            mime="text/csv",
+            on_click=log_csv_export,
+            use_container_width=True
+        )
         
-        # Render the exact same HTML grid format, but pass 'roster' as the prefix to prevent duplicate button keys
+        # Render the exact same HTML grid format
         render_roster_grid(display_df, key_prefix="roster")
 
 # ------------------------------------------------------------------
