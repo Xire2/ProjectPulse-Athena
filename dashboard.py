@@ -1005,7 +1005,20 @@ def render_student_list(df_all):
             st.rerun()
 
     st.caption("Tip: click on any cell (e.g. Student Name) to inspect the candidate's profile.")
+    # --------------------------------------------------------------
+    # US-31: EXPORT FILTERED STUDENT LIST
+    # --------------------------------------------------------------
 
+    csv_data = display_df.to_csv(index=False).encode("utf-8-sig")
+
+    st.download_button(
+        label="📥 Export Student List (CSV)",
+        data=csv_data,
+        file_name="project_pulse_student_list.csv",
+        mime="text/csv",
+        use_container_width=True,
+        key="export_student_csv"
+    )
 
 # ------------------------------------------------------------------
 # VIEW 2: STUDENT PROFILE (Read / Write Record Inspector)
