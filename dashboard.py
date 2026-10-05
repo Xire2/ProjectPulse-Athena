@@ -1097,68 +1097,62 @@ def render_student_list(df_all):
 
         with col1:
             with st.container(border=True): 
-                title_col, clear_col = st.columns([5, 1])
-                with title_col: title_placeholder = st.empty()
-                with clear_col: clear_placeholder = st.empty()
+                st.subheader("Lifecycle Stage Breakdown — Pending", help="Number and percentage of students who have not yet completed each milestone.")
 
-                chart_view = st.selectbox("Lifecycle Metrics View", ["Accomplished", "Pending"], label_visibility="collapsed", key="chart_view_state")
-
-                if chart_view == "Accomplished":
-                    stage_counts = [cw_completed, exam_passed, capstone_defended]
-                    help_text = "Absolute number and percentage of students who accomplished each milestone."
-                else:
-                    stage_counts = [missing_coursework, missing_exam, missing_capstone]
-                    help_text = "Absolute number and percentage of students who have not yet completed each milestone."
-
+                # Calculate Overall Completion pending (remaining students)
                 stage_df = pd.DataFrame({
-                    "Lifecycle Stage": ["Coursework", "Comprehensive Exam", "Capstone"],
-                    "Students": stage_counts
+                    "Lifecycle Stage": ["Overall Completion", "Capstone", "Comprehensive Exam", "Coursework"],
+                    "Students": [remaining_students, missing_capstone, missing_exam, missing_coursework]
                 })
-
-                if total_students > 0: stage_df["Percentage"] = (stage_df["Students"] / total_students * 100)
-                else: stage_df["Percentage"] = 0.0
+                
+                if total_students > 0: 
+                    stage_df["Percentage"] = (stage_df["Students"] / total_students * 100)
+                else: 
+                    stage_df["Percentage"] = 0.0
 
                 fig = px.bar(
                     stage_df, x="Percentage", y="Lifecycle Stage", orientation="h",
                     text="Percentage", custom_data=["Students"], range_x=[0, 100],
-                    labels={"Percentage": f"Percentage of Active Students ({chart_view})", "Lifecycle Stage": ""}
+                    labels={"Percentage": "Percentage of Active Students", "Lifecycle Stage": ""}
                 )
 
                 fig.update_traces(
-                    marker_color=["#0072B2", "#FFAE00", "#D50000"], texttemplate="%{text:.2f}%",
+                    marker_color=["#999999", "#D50000", "#FFAE00", "#0072B2"], # Gray added for Overall
+                    texttemplate="%{text:.2f}%",
                     textposition="outside", hovertemplate="<b>%{y}</b><br>Students: %{customdata[0]}<extra></extra>"
                 )
-
+                
                 fig.update_layout(
                     height=320, margin=dict(l=10, r=40, t=30, b=10),
                     xaxis=dict(range=[0, 100], ticksuffix="%", dtick=20, fixedrange=True),
-                    yaxis=dict(categoryorder="array", categoryarray=["Capstone", "Comprehensive Exam", "Coursework"], fixedrange=True),
-                    showlegend=False,
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)"
+                    yaxis=dict(categoryorder="array", categoryarray=["Coursework", "Comprehensive Exam", "Capstone", "Overall Completion"], fixedrange=True),
+                    showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)"
                 )
 
+                # 1. Render Chart and Capture Click
                 chart_event = st.plotly_chart(
                     fig, width="stretch", config={"displayModeBar": False},
                     on_select="rerun", selection_mode="points", key=f"lifecycle_chart_{st.session_state.chart_key_counter}"
                 )
 
+                # 2. Store the clicked stage into session state for the Risk Table
+                if "risk_filter_stage" not in st.session_state:
+                    st.session_state.risk_filter_stage = None
+
                 if chart_event and chart_event.selection:
                     selected_points = chart_event.selection.get("points", [])
                     if selected_points:
                         clicked_stage = selected_points[0].get("y")
-                        if clicked_stage in ["Coursework", "Comprehensive Exam", "Capstone"]:
-                            st.session_state.drill_stage = clicked_stage
-                    else: st.session_state.drill_stage = None
+                        if clicked_stage in ["Coursework", "Comprehensive Exam", "Capstone", "Overall Completion"]:
+                            st.session_state.risk_filter_stage = clicked_stage
+                    else: 
+                        st.session_state.risk_filter_stage = None
 
-                chart_title = "Lifecycle Stage Breakdown"
-                if st.session_state.drill_stage: chart_title += f" — {st.session_state.drill_stage}"
-
-                title_placeholder.subheader(chart_title, help=help_text)
-
-                if st.session_state.drill_stage:
-                    if clear_placeholder.button("✕ Clear", key="clear_drill_chart", use_container_width=True):
-                        st.session_state.drill_stage = None
+                # 3. Show an active filter indicator and a clear button right under the chart
+                if st.session_state.risk_filter_stage:
+                    st.caption(f"🎯 **Filtering 'Students at Risk' by:** `{st.session_state.risk_filter_stage}`")
+                    if st.button("✕ Clear Chart Filter", key="clear_risk_filter", use_container_width=True):
+                        st.session_state.risk_filter_stage = None
                         st.session_state.chart_key_counter += 1
                         st.rerun()
 
@@ -1166,17 +1160,30 @@ def render_student_list(df_all):
             with st.container(border=True): 
                 render_completion_trend_chart(df_all, ACTIVE_PROGRAM)
 
-        # -- Dashboard Risk Table --
+       # -- Dashboard Risk Table --
         st.divider()
         st.subheader("🚨 Students At Risk")
         st.caption("Students who have exceeded expected duration thresholds for their current lifecycle stage.")
         
         at_risk_df = df_summary[df_summary["is_at_risk"] == True].copy()
         
+        # Apply the chart filter to the at-risk students based on the risk details column
+        if st.session_state.get("risk_filter_stage"):
+            selected = st.session_state.risk_filter_stage
+            if selected == "Coursework":
+                at_risk_df = at_risk_df[at_risk_df["risk_details"].str.contains("Coursework", na=False)]
+            elif selected == "Comprehensive Exam":
+                at_risk_df = at_risk_df[at_risk_df["risk_details"].str.contains("Exam", na=False)]
+            elif selected == "Capstone":
+                at_risk_df = at_risk_df[at_risk_df["risk_details"].str.contains("Capstone", na=False)]
+            # If "Overall Completion" is clicked, we show all of them, so no filter is applied!
+        
         if at_risk_df.empty:
-            st.success("Great news! No students are currently flagged as at-risk.")
+            if st.session_state.get("risk_filter_stage") and st.session_state.risk_filter_stage != "Overall Completion":
+                st.success(f"Great news! No students are currently flagged as at-risk in the **{st.session_state.risk_filter_stage}** stage.")
+            else:
+                st.success("Great news! No students are currently flagged as at-risk.")
         else:
-            # Default sort by name since we removed the sort dropdown
             display_risk_df = format_for_grid(at_risk_df.sort_values("full_name").reset_index(drop=True))
             render_roster_grid(display_risk_df, key_prefix="dash")
 
