@@ -1097,12 +1097,26 @@ def render_student_list(df_all):
 
         with col1:
             with st.container(border=True): 
-                st.subheader("Lifecycle Stage Breakdown", help="Overall completion vs. students pending specific milestones.")
+                st.subheader("Lifecycle Stage Breakdown", help="Distribution of students across their current active lifecycle stage.")
 
-                # Calculate Overall Completion using 'fully_completed' instead of remaining students
+                # 1. Mutually Exclusive Current Stage Logic
+                current_cw = len(df_summary[df_summary["coursework_display"] != "Completed"])
+                
+                current_ce = len(df_summary[
+                    (df_summary["coursework_display"] == "Completed") & 
+                    (df_summary["comprehensive_exam_display"] != "Passed")
+                ])
+                
+                current_cap = len(df_summary[
+                    (df_summary["coursework_display"] == "Completed") & 
+                    (df_summary["comprehensive_exam_display"] == "Passed") & 
+                    (df_summary["capstone_display"] != "Defended")
+                ])
+
+                # Build the chart data using the strict buckets
                 stage_df = pd.DataFrame({
                     "Lifecycle Stage": ["Overall Completion", "Capstone", "Comprehensive Exam", "Coursework"],
-                    "Students": [fully_completed, missing_capstone, missing_exam, missing_coursework]
+                    "Students": [fully_completed, current_cap, current_ce, current_cw]
                 })
                 
                 if total_students > 0: 
@@ -1175,19 +1189,25 @@ def render_student_list(df_all):
             
             filtered_full_df = df_summary.copy()
             
-            # Apply logic based exactly on what the chart bars represent
+            # Apply mutually exclusive "current stage" logic
             if selected == "Coursework":
                 filtered_full_df = filtered_full_df[filtered_full_df["coursework_display"] != "Completed"]
+                
             elif selected == "Comprehensive Exam":
-                filtered_full_df = filtered_full_df[filtered_full_df["comprehensive_exam_display"] != "Passed"]
+                filtered_full_df = filtered_full_df[
+                    (filtered_full_df["coursework_display"] == "Completed") & 
+                    (filtered_full_df["comprehensive_exam_display"] != "Passed")
+                ]
+                
             elif selected == "Capstone":
-                filtered_full_df = filtered_full_df[filtered_full_df["capstone_display"] != "Defended"]
-            elif selected == "Overall Completion":
                 filtered_full_df = filtered_full_df[
                     (filtered_full_df["coursework_display"] == "Completed") & 
                     (filtered_full_df["comprehensive_exam_display"] == "Passed") & 
-                    (filtered_full_df["capstone_display"] == "Defended")
+                    (filtered_full_df["capstone_display"] != "Defended")
                 ]
+                
+            elif selected == "Overall Completion":
+                filtered_full_df = filtered_full_df[filtered_full_df["capstone_display"] == "Defended"]
 
             if filtered_full_df.empty:
                 st.info(f"No students found in the {selected} category.")
