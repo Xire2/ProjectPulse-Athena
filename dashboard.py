@@ -1141,24 +1141,24 @@ def render_student_list(df_all):
                     on_select="rerun", selection_mode="points", key=f"lifecycle_chart_{st.session_state.chart_key_counter}"
                 )
 
-                # 2. Store the clicked stage into session state for the Risk Table
-                if "risk_filter_stage" not in st.session_state:
-                    st.session_state.risk_filter_stage = None
+                # 2. Store the clicked stage into session state
+                if "chart_filter_stage" not in st.session_state:
+                    st.session_state.chart_filter_stage = None
 
                 if chart_event and chart_event.selection:
                     selected_points = chart_event.selection.get("points", [])
                     if selected_points:
                         clicked_stage = selected_points[0].get("y")
                         if clicked_stage in ["Coursework", "Comprehensive Exam", "Capstone", "Overall Completion"]:
-                            st.session_state.risk_filter_stage = clicked_stage
+                            st.session_state.chart_filter_stage = clicked_stage
                     else: 
-                        st.session_state.risk_filter_stage = None
+                        st.session_state.chart_filter_stage = None
 
                 # 3. Show an active filter indicator and a clear button right under the chart
-                if st.session_state.risk_filter_stage:
-                    st.caption(f"🎯 **Filtering 'Students at Risk' by:** `{st.session_state.risk_filter_stage}`")
-                    if st.button("✕ Clear Chart Filter", key="clear_risk_filter", use_container_width=True):
-                        st.session_state.risk_filter_stage = None
+                if st.session_state.chart_filter_stage:
+                    st.caption(f"🎯 **Viewing full roster for:** `{st.session_state.chart_filter_stage}`")
+                    if st.button("✕ Clear Chart Filter", key="clear_chart_filter", use_container_width=True):
+                        st.session_state.chart_filter_stage = None
                         st.session_state.chart_key_counter += 1
                         st.rerun()
 
@@ -1166,32 +1166,47 @@ def render_student_list(df_all):
             with st.container(border=True): 
                 render_completion_trend_chart(df_all, ACTIVE_PROGRAM)
 
-       # -- Dashboard Risk Table --
+       # -- Dynamic Full Roster Table (Pops up on chart click) --
+        if st.session_state.get("chart_filter_stage"):
+            st.divider()
+            selected = st.session_state.chart_filter_stage
+            st.subheader(f"📋 Full Roster: {selected}")
+            st.caption(f"Showing all active students belonging to the {selected} category.")
+            
+            filtered_full_df = df_summary.copy()
+            
+            # Apply logic based exactly on what the chart bars represent
+            if selected == "Coursework":
+                filtered_full_df = filtered_full_df[filtered_full_df["coursework_display"] != "Completed"]
+            elif selected == "Comprehensive Exam":
+                filtered_full_df = filtered_full_df[filtered_full_df["comprehensive_exam_display"] != "Passed"]
+            elif selected == "Capstone":
+                filtered_full_df = filtered_full_df[filtered_full_df["capstone_display"] != "Defended"]
+            elif selected == "Overall Completion":
+                filtered_full_df = filtered_full_df[
+                    (filtered_full_df["coursework_display"] == "Completed") & 
+                    (filtered_full_df["comprehensive_exam_display"] == "Passed") & 
+                    (filtered_full_df["capstone_display"] == "Defended")
+                ]
+
+            if filtered_full_df.empty:
+                st.info(f"No students found in the {selected} category.")
+            else:
+                display_filtered_df = format_for_grid(filtered_full_df.sort_values("full_name").reset_index(drop=True))
+                render_roster_grid(display_filtered_df, key_prefix="dynamic_roster")
+
+        # -- Dashboard Risk Table --
         st.divider()
         st.subheader("🚨 Students At Risk")
         st.caption("Students who have exceeded expected duration thresholds for their current lifecycle stage.")
         
         at_risk_df = df_summary[df_summary["is_at_risk"] == True].copy()
         
-        # Apply the chart filter to the at-risk students based on the risk details column
-        if st.session_state.get("risk_filter_stage"):
-            selected = st.session_state.risk_filter_stage
-            if selected == "Coursework":
-                at_risk_df = at_risk_df[at_risk_df["risk_details"].str.contains("Coursework", na=False)]
-            elif selected == "Comprehensive Exam":
-                at_risk_df = at_risk_df[at_risk_df["risk_details"].str.contains("Exam", na=False)]
-            elif selected == "Capstone":
-                at_risk_df = at_risk_df[at_risk_df["risk_details"].str.contains("Capstone", na=False)]
-            # If "Overall Completion" is clicked, we show all of them, so no filter is applied!
-        
         if at_risk_df.empty:
-            if st.session_state.get("risk_filter_stage") and st.session_state.risk_filter_stage != "Overall Completion":
-                st.success(f"Great news! No students are currently flagged as at-risk in the **{st.session_state.risk_filter_stage}** stage.")
-            else:
-                st.success("Great news! No students are currently flagged as at-risk.")
+            st.success("Great news! No students are currently flagged as at-risk.")
         else:
             display_risk_df = format_for_grid(at_risk_df.sort_values("full_name").reset_index(drop=True))
-            render_roster_grid(display_risk_df, key_prefix="dash")
+            render_roster_grid(display_risk_df, key_prefix="dash_risk")
 
     # --- RENDER STUDENT ROSTER ---
     elif st.session_state.admin_view == "Student Roster":
