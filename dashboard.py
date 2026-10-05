@@ -1097,12 +1097,12 @@ def render_student_list(df_all):
 
         with col1:
             with st.container(border=True): 
-                st.subheader("Lifecycle Stage Breakdown — Pending", help="Number and percentage of students who have not yet completed each milestone.")
+                st.subheader("Lifecycle Stage Breakdown", help="Overall completion vs. students pending specific milestones.")
 
-                # Calculate Overall Completion pending (remaining students)
+                # Calculate Overall Completion using 'fully_completed' instead of remaining students
                 stage_df = pd.DataFrame({
                     "Lifecycle Stage": ["Overall Completion", "Capstone", "Comprehensive Exam", "Coursework"],
-                    "Students": [remaining_students, missing_capstone, missing_exam, missing_coursework]
+                    "Students": [fully_completed, missing_capstone, missing_exam, missing_coursework]
                 })
                 
                 if total_students > 0: 
@@ -1116,16 +1116,22 @@ def render_student_list(df_all):
                     labels={"Percentage": "Percentage of Active Students", "Lifecycle Stage": ""}
                 )
 
+                # Set colors: Green (#0DC249) for Overall, Red for Capstone, Yellow for Exam, Blue for Coursework
                 fig.update_traces(
-                    marker_color=["#999999", "#D50000", "#FFAE00", "#0072B2"], # Gray added for Overall
+                    marker_color=["#0DC249", "#D50000", "#FFAE00", "#0072B2"], 
                     texttemplate="%{text:.2f}%",
                     textposition="outside", hovertemplate="<b>%{y}</b><br>Students: %{customdata[0]}<extra></extra>"
                 )
                 
+                # 'categoryarray' plots from bottom to top. Placing Overall Completion first puts it at the bottom.
                 fig.update_layout(
                     height=320, margin=dict(l=10, r=40, t=30, b=10),
                     xaxis=dict(range=[0, 100], ticksuffix="%", dtick=20, fixedrange=True),
-                    yaxis=dict(categoryorder="array", categoryarray=["Coursework", "Comprehensive Exam", "Capstone", "Overall Completion"], fixedrange=True),
+                    yaxis=dict(
+                        categoryorder="array", 
+                        categoryarray=["Overall Completion", "Capstone", "Comprehensive Exam", "Coursework"], 
+                        fixedrange=True
+                    ),
                     showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)"
                 )
 
