@@ -1635,28 +1635,9 @@ def render_student_profile(df_all):
                                             "stage_id": stage_id,
                                             "new_status_id": new_status_id
                                         }
-                                    )    
-                                      
-                          s.commit()  
-            # Update the current status
-            update_sql = text("""
-                UPDATE student_lifecycle_status
-                SET
-                    status_id = :new_status_id,
-                    last_updated_date = NOW()
-                WHERE student_lifecycle_status_id = :lifecycle_status_id;
-            """)
-
-            s.execute(
-                update_sql,
-                {
-                    "new_status_id": new_status_id,
-                    "lifecycle_status_id": lifecycle_status_id
-                }
-            )
-
-    else:
-        # No current record exists yet, so create it.
+                                    )
+                            s.commit()
+                        
         insert_current_sql = text("""
             INSERT INTO student_lifecycle_status (
                 student_number,
