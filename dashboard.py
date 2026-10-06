@@ -1507,6 +1507,11 @@ def render_student_list(df_all):
             "overall_status": "Overall Status", "coursework_display": "Coursework",
             "comprehensive_exam_display": "Comprehensive Exam", "capstone_display": "Capstone", "adviser": "Adviser", "student_email": "Email", "coursework_updated_at": "Last Update"
         })
+    # --- Shared Summary Data ---
+    df_summary = df_all.copy()
+    selected_adviser = "All"
+    selected_cohort = "All"
+    current_user = st.session_state.user_info.get("full_name", "")
     # --- RENDER EXECUTIVE DASHBOARD ---
     if st.session_state.admin_view == "Executive Dashboard":
         # --- Dashboard Filters (No Search or Sort) ---
