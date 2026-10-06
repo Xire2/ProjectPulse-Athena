@@ -1349,8 +1349,8 @@ def render_completion_trend_chart(df_all, active_program):
     ).reset_index()
     
     trend_df['completion_rate'] = (trend_df['completed_students'] / trend_df['total_students']) * 100
-    trend_df['sort_year'] = trend_df['cohort'].astype(str).str.extract(r'[TQ](\d{2})').astype(float)
-    trend_df['sort_term'] = trend_df['cohort'].astype(str).str.extract(r'^(\d)[TQ]').astype(float)
+    trend_df['sort_year'] = trend_df['cohort'].astype(str).str.extract(r'[TQ](\d{2})')[0].astype(float)
+    trend_df['sort_term'] = trend_df['cohort'].astype(str).str.extract(r'^(\d)[TQ]')[0].astype(float)
     
     trend_df = trend_df.dropna(subset=['sort_year', 'sort_term']).sort_values(by=['sort_year', 'sort_term']).tail(4) 
     
