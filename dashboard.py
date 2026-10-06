@@ -1638,32 +1638,6 @@ def render_student_profile(df_all):
                                     )
                             s.commit()
                         
-        insert_current_sql = text("""
-            INSERT INTO student_lifecycle_status (
-                student_number,
-                stage_id,
-                status_id,
-                last_updated_date
-            )
-            VALUES (
-                :sn,
-                :stage_id,
-                :new_status_id,
-                NOW()
-            );
-        """)
-
-        s.execute(
-            insert_current_sql,
-            {
-                "sn": int(student["student_number"]),
-                "stage_id": stage_id,
-                "new_status_id": new_status_id
-            }
-        )
-                            
-                            s.commit()
-                        
                         log_security_event(user["user_id"], "STUDENT_RECORD_UPDATED", f"Modified record for Student ID {student['student_number']} (CW: {new_cw}, Exam: {new_ce}, Capstone: {new_cap}).")
                         st.success("Record successfully updated in Supabase!")
                         load_students.clear()
