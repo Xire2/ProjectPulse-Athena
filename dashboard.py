@@ -164,7 +164,103 @@ def load_dashboard_config():
     return "UNCONFIGURED PROGRAM", "UNCONFIGURED TERM"
 
 ACTIVE_PROGRAM, CURRENT_TERM_LABEL = load_dashboard_config()
+# ------------------------------------------------------------------
+# TERM MANAGEMENT
+# ------------------------------------------------------------------
+def load_available_terms():
+    """
+    Load academic terms that are currently available to dashboard users.
 
+    Future terms are excluded until their start date.
+    The current term is determined from the term table dates.
+    """
+
+    today = datetime.now(ZoneInfo("Asia/Manila")).date()
+
+    terms_df = conn.query(
+        """
+        SELECT
+            term_id,
+            term_code,
+            start_date,
+            end_date
+        FROM term
+        WHERE start_date IS NOT NULL
+          AND start_date <= :today
+        ORDER BY start_date DESC;
+        """,
+        params={"today": today},
+        ttl=0
+    )
+
+    return terms_df
+
+
+def format_term_label(term_code):
+    """
+    Converts:
+        1Q2627 → 1Q, A.Y. 2026–2027
+        1T2526 → 1T, A.Y. 2025–2026
+    """
+
+    term_code = str(term_code).strip().upper()
+
+    match = re.match(r"^(\d[TQ])(\d{2})(\d{2})$", term_code)
+
+    if not match:
+        return term_code
+
+    term_period = match.group(1)
+    start_year = int(match.group(2))
+    end_year = int(match.group(3))
+
+    # Convert 26 → 2026 and 27 → 2027
+    start_full_year = 2000 + start_year
+    end_full_year = 2000 + end_year
+
+    return f"{term_period}, A.Y. {start_full_year}–{end_full_year}"
+
+
+def get_current_term():
+    """
+    Determines the current academic term from the term table.
+
+    Current term:
+        start_date <= today
+        AND
+        end_date is NULL OR end_date >= today
+
+    If more than one term qualifies, the term with the
+    latest start date is treated as current.
+    """
+
+    today = datetime.now(ZoneInfo("Asia/Manila")).date()
+
+    current_term_df = conn.query(
+        """
+        SELECT
+            term_id,
+            term_code,
+            start_date,
+            end_date
+        FROM term
+        WHERE start_date IS NOT NULL
+          AND start_date <= :today
+          AND (
+              end_date IS NULL
+              OR end_date >= :today
+          )
+        ORDER BY start_date DESC
+        LIMIT 1;
+        """,
+        params={"today": today},
+        ttl=0
+    )
+
+    if current_term_df.empty:
+        return None
+
+    return current_term_df.iloc[0]
 # ------------------------------------------------------------------
 # DATA LOADERS (DYNAMICALLY MAPPED & FILTERED BY PROGRAM)
 # ------------------------------------------------------------------
@@ -1354,48 +1450,155 @@ def render_student_list(df_all):
             "overall_status": "Overall Status", "coursework_display": "Coursework",
             "comprehensive_exam_display": "Comprehensive Exam", "capstone_display": "Capstone", "adviser": "Adviser", "student_email": "Email", "coursework_updated_at": "Last Update"
         })
+# --- Dashboard Filters (No Search or Sort) ---
+term_col, cohort_col, adv_col = st.columns(3)
 
-    active_cohort = st.session_state.get("cohort_filter", "All")
-    
-    if active_cohort == "All": 
-        summary_label = "All Cohorts"
-    elif len(active_cohort) == 6 and active_cohort[1] in ['T', 'Q']:
-        term_num = active_cohort[0]
-        term_type = active_cohort[1]
-        y1 = active_cohort[2:4]
-        y2 = active_cohort[4:6]
-        summary_label = f"{term_num}{term_type}, A.Y. 20{y1}–20{y2}"
-    else: 
-        summary_label = active_cohort
+# =========================================================
+# TERM FILTER
+# =========================================================
+with term_col:
+    available_terms_df = load_available_terms()
+    current_term = get_current_term()
 
-    df_summary = df_all.copy()
-    if active_cohort != "All":
-        df_summary = df_summary[df_summary["cohort"].astype(str) == active_cohort]
+    if available_terms_df.empty:
+        st.warning("No academic terms are currently available.")
+        selected_term_id = None
+        selected_term_code = None
 
-    # --- RENDER EXECUTIVE DASHBOARD ---
-    if st.session_state.admin_view == "Executive Dashboard":
-        st.markdown(f"#### Executive Summary — {summary_label}")
-        
-        # --- Dashboard Filters (No Search or Sort) ---
-        cohort_col, adv_col = st.columns(2)
-        with cohort_col:
-            valid_cohorts = sorted([str(c) for c in df_all["cohort"].dropna().unique().tolist() if str(c).strip()], key=get_cohort_val)
-            selected_cohort = st.selectbox("Filter by cohort", ["All"] + valid_cohorts, key="cohort_filter")
-        with adv_col:
-            valid_advisers = sorted([str(a) for a in df_all["adviser"].dropna().unique().tolist() if str(a).strip()])
-            current_user = st.session_state.user_info.get("full_name", "")
-            user_role = st.session_state.user_info.get("role", "")
-            
-            if "Advisor" in user_role or "Faculty" in user_role:
-                adv_view = st.selectbox("Adviser View", ["My Advisees", "All Students"], key="adv_view_toggle")
-                selected_adviser = current_user if adv_view == "My Advisees" else "All"
+    else:
+        term_options = available_terms_df["term_id"].tolist()
+
+        # Default to the current term
+        if "selected_term_id" not in st.session_state:
+            if current_term is not None:
+                st.session_state.selected_term_id = int(
+                    current_term["term_id"]
+                )
             else:
-                default_idx = valid_advisers.index(current_user) + 1 if current_user in valid_advisers else 0
-                selected_adviser = st.selectbox("Filter by Adviser", ["All"] + valid_advisers, index=default_idx, key="adviser_filter")
+                st.session_state.selected_term_id = int(
+                    term_options[0]
+                )
 
-        # Apply Adviser Filter to the dashboard metrics!
-        if selected_adviser != "All":
-            df_summary = df_summary[df_summary["adviser"].astype(str) == selected_adviser]
+        # Make sure saved selection still exists
+        if st.session_state.selected_term_id not in term_options:
+            st.session_state.selected_term_id = int(
+                current_term["term_id"]
+                if current_term is not None
+                else term_options[0]
+            )
+
+        selected_term_id = st.selectbox(
+            "Filter by term",
+            options=term_options,
+            index=term_options.index(
+                st.session_state.selected_term_id
+            ),
+            format_func=lambda term_id: format_term_label(
+                available_terms_df.loc[
+                    available_terms_df["term_id"] == term_id,
+                    "term_code"
+                ].iloc[0]
+            ),
+            key="dashboard_term_filter"
+        )
+
+        st.session_state.selected_term_id = selected_term_id
+
+        selected_term_code = available_terms_df.loc[
+            available_terms_df["term_id"] == selected_term_id,
+            "term_code"
+        ].iloc[0]
+
+
+# =========================================================
+# COHORT FILTER
+# =========================================================
+with cohort_col:
+    valid_cohorts = sorted(
+        [
+            str(c)
+            for c in df_all["cohort"].dropna().unique().tolist()
+            if str(c).strip()
+        ],
+        key=get_cohort_val
+    )
+
+    selected_cohort = st.selectbox(
+        "Filter by cohort",
+        ["All"] + valid_cohorts,
+        key="cohort_filter"
+    )
+
+
+# =========================================================
+# ADVISER FILTER
+# =========================================================
+with adv_col:
+    valid_advisers = sorted(
+        [
+            str(a)
+            for a in df_all["adviser"].dropna().unique().tolist()
+            if str(a).strip()
+        ]
+    )
+
+    current_user = st.session_state.user_info.get("full_name", "")
+    user_role = st.session_state.user_info.get("role", "")
+
+    if "Advisor" in user_role or "Faculty" in user_role:
+        adv_view = st.selectbox(
+            "Adviser View",
+            ["My Advisees", "All Students"],
+            key="adv_view_toggle"
+        )
+
+        selected_adviser = (
+            current_user
+            if adv_view == "My Advisees"
+            else "All"
+        )
+
+    else:
+        default_idx = (
+            valid_advisers.index(current_user) + 1
+            if current_user in valid_advisers
+            else 0
+        )
+
+        selected_adviser = st.selectbox(
+            "Filter by Adviser",
+            ["All"] + valid_advisers,
+            index=default_idx,
+            key="adviser_filter"
+        )
+
+
+# =========================================================
+# SELECTED TERM HEADING
+# =========================================================
+if selected_term_code:
+    st.markdown(
+        f"#### {format_term_label(selected_term_code)}"
+    )
+
+
+# =========================================================
+# APPLY COHORT + ADVISER FILTERS
+# =========================================================
+df_summary = df_all.copy()
+if selected_term_id is not None:
+    df_summary = df_summary[
+        df_summary["term_id"] == selected_term_id
+    ]
+if selected_cohort != "All":
+    df_summary = df_summary[
+        df_summary["cohort"].astype(str) == selected_cohort
+    ]
+
+if selected_adviser != "All":
+    df_summary = df_summary[
+        df_summary["adviser"].astype(str) == selected_adviser
+    ]
             
         total_students = len(df_summary)
         cw_completed = len(df_summary[df_summary["coursework_display"] == "Completed"])
@@ -1671,20 +1874,7 @@ def render_student_list(df_all):
         search_col, cohort_col, adv_col, sort_col = st.columns([2, 1, 1.2, 1])
         
         with search_col: search_term = st.text_input("Search by name or student ID", placeholder="e.g. Adrian Santos or 2026124837", key="search_filter")
-        with cohort_col:
-            valid_cohorts = sorted([str(c) for c in df_all["cohort"].dropna().unique().tolist() if str(c).strip()], key=get_cohort_val)
-            selected_cohort = st.selectbox("Filter by cohort", ["All"] + valid_cohorts, key="cohort_filter")
-        with adv_col:
-            valid_advisers = sorted([str(a) for a in df_all["adviser"].dropna().unique().tolist() if str(a).strip()])
-            current_user = st.session_state.user_info.get("full_name", "")
-            user_role = st.session_state.user_info.get("role", "")
-            
-            if "Advisor" in user_role or "Faculty" in user_role:
-                adv_view = st.selectbox("Adviser View", ["My Advisees", "All Students"], key="adv_view_toggle")
-                selected_adviser = current_user if adv_view == "My Advisees" else "All"
-            else:
-                default_idx = valid_advisers.index(current_user) + 1 if current_user in valid_advisers else 0
-                selected_adviser = st.selectbox("Filter by Adviser", ["All"] + valid_advisers, index=default_idx, key="adviser_filter")
+        
         with sort_col: sort_option = st.selectbox("Sort by", ["Name", "Student ID", "Overall Status"], key="sort_filter")
 
         filtered = df_summary.copy()
