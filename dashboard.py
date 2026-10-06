@@ -1621,12 +1621,12 @@ fully_completed = len(
         (df_summary["capstone_display"] == "Defended")
     ]
 )
-        completion_rate = int((fully_completed / total_students * 100)) if total_students > 0 else 0
+completion_rate = int((fully_completed / total_students * 100)) if total_students > 0 else 0
 
-        remaining_students = int(total_students - fully_completed)
-        missing_coursework = len(df_summary[df_summary["coursework_display"] != "Completed"])
-        missing_exam = len(df_summary[df_summary["comprehensive_exam_display"] != "Passed"])
-        missing_capstone = len(df_summary[df_summary["capstone_display"] != "Defended"])
+remaining_students = int(total_students - fully_completed)
+missing_coursework = len(df_summary[df_summary["coursework_display"] != "Completed"])
+missing_exam = len(df_summary[df_summary["comprehensive_exam_display"] != "Passed"])
+missing_capstone = len(df_summary[df_summary["capstone_display"] != "Defended"])
 
         # --- TERM-OVER-TERM COMPARISON LOGIC ---
         all_cohorts_sorted = sorted([str(c) for c in df_all["cohort"].dropna().unique() if str(c).strip()], key=get_cohort_val)
