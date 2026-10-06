@@ -1750,10 +1750,6 @@ def render_student_list(df_all):
                 f"{remaining_students - p_rem:+} vs {prior_cohort}"
             )
 
-            grad_color_mode = "normal"
-            comp_color_mode = "normal"
-            rem_color_mode = "inverse"
-
         else:
             grad_delta_str = (
                 f"{grad_numerator} out of {total_students} students"
@@ -1766,6 +1762,9 @@ def render_student_list(df_all):
             rem_delta_str = (
                 f"{remaining_students} out of {total_students} students"
             )
+            grad_color_mode = "normal"
+            comp_color_mode = "normal"
+            rem_color_mode = "inverse"
 
         top_c1, top_c2, top_c3, top_c4 = st.columns(4)
 
