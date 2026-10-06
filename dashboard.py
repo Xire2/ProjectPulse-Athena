@@ -792,119 +792,383 @@ def render_permissions_and_logs():
 # ------------------------------------------------------------------
 def render_academic_terms():
     st.subheader("📅 Academic Terms")
-    st.caption("Create and maintain academic terms used by the dashboard for term-based filtering and historical reporting.")
+    st.caption(
+        "Create and maintain academic terms used by the dashboard "
+        "for term-based filtering and historical reporting."
+    )
 
     # --------------------------------------------------------------
-    # ADD NEW TERM
+    # EDIT MODE
     # --------------------------------------------------------------
-    st.markdown("#### Add New Academic Term")
+    editing_term_id = st.session_state.get("editing_term_id")
 
-    with st.form("add_academic_term_form"):
-        term_code = st.text_input(
-            "Term Code",
-            placeholder="e.g. 1Q2627",
-            help="Enter the official academic term code used by the institution."
-        ).strip().upper()
+    if editing_term_id is not None:
 
-        date_col1, date_col2 = st.columns(2)
+        st.markdown("#### Edit Academic Term")
 
-        with date_col1:
-            start_date = st.date_input(
-                "Start Date",
-                help="Official beginning date of the academic term."
+        try:
+            edit_term_df = conn.query(
+                """
+                SELECT
+                    term_id,
+                    term_code,
+                    start_date,
+                    end_date
+                FROM term
+                WHERE term_id = :term_id;
+                """,
+                params={"term_id": editing_term_id},
+                ttl=0
             )
 
-        with date_col2:
-            end_date = st.date_input(
-                "End Date",
-                help="Official ending date of the academic term."
-            )
-
-        submitted = st.form_submit_button(
-            "Add Academic Term",
-            type="primary",
-            use_container_width=True
-        )
-
-        if submitted:
-            # ------------------------------------------------------
-            # VALIDATION
-            # ------------------------------------------------------
-            if not term_code:
-                st.error("Please enter a term code.")
-
-            elif not re.match(r"^\d[TQ]\d{4}$", term_code):
-                st.error(
-                    "Invalid term code format. Use the format "
-                    "1T2526 or 1Q2627."
-                )
-
-            elif end_date < start_date:
-                st.error("End Date cannot be earlier than Start Date.")
+            if edit_term_df.empty:
+                st.error("The selected academic term could not be found.")
+                st.session_state.editing_term_id = None
+                st.rerun()
 
             else:
-                try:
-                    with conn.session as s:
+                current_term = edit_term_df.iloc[0]
 
-                        # Check whether the term already exists
-                        existing_term = s.execute(
-                            text("""
-                                SELECT term_id
-                                FROM term
-                                WHERE term_code = :term_code;
-                            """),
-                            {
-                                "term_code": term_code
-                            }
-                        ).fetchone()
+                with st.form("edit_academic_term_form"):
 
-                        if existing_term:
-                            st.error(
-                                f"Academic term {term_code} already exists."
-                            )
+                    edit_term_code = st.text_input(
+                        "Term Code",
+                        value=str(current_term["term_code"]),
+                        help="Official academic term code."
+                    ).strip().upper()
 
-                        else:
-                            # Insert the new term
-                            s.execute(
-                                text("""
-                                    INSERT INTO term (
-                                        term_code,
-                                        start_date,
-                                        end_date
-                                    )
-                                    VALUES (
-                                        :term_code,
-                                        :start_date,
-                                        :end_date
-                                    );
-                                """),
-                                {
-                                    "term_code": term_code,
-                                    "start_date": start_date,
-                                    "end_date": end_date
-                                }
-                            )
+                    edit_col1, edit_col2 = st.columns(2)
 
-                            s.commit()
+                    with edit_col1:
+                        edit_start_date = st.date_input(
+                            "Start Date",
+                            value=pd.to_datetime(
+                                current_term["start_date"]
+                            ).date(),
+                            help="Official beginning date of the academic term."
+                        )
 
-                            log_security_event(
-                                user["user_id"],
-                                "ACADEMIC_TERM_CREATED",
-                                f"Created academic term {term_code} "
-                                f"({start_date} to {end_date})."
-                            )
+                    with edit_col2:
+                        edit_end_date = st.date_input(
+                            "End Date",
+                            value=pd.to_datetime(
+                                current_term["end_date"]
+                            ).date(),
+                            help="Official ending date of the academic term."
+                        )
 
-                            st.success(
-                                f"Academic term {term_code} was successfully added."
-                            )
-
-                            st.rerun()
-
-                except Exception as e:
-                    st.error(
-                        f"Error creating academic term: {e}"
+                    save_edit = st.form_submit_button(
+                        "Save Changes",
+                        type="primary",
+                        use_container_width=True
                     )
 
+                if st.button(
+                    "Cancel",
+                    use_container_width=True
+                ):
+                    st.session_state.editing_term_id = None
+                    st.rerun()
+
+                if save_edit:
+
+                    # --------------------------------------------------
+                    # VALIDATE EDITED TERM
+                    # --------------------------------------------------
+                    if not edit_term_code:
+                        st.error("Please enter a term code.")
+
+                    elif not re.match(
+                        r"^\d[TQ]\d{4}$",
+                        edit_term_code
+                    ):
+                        st.error(
+                            "Invalid term code format. Use the format "
+                            "1T2526 or 1Q2627."
+                        )
+
+                    elif edit_end_date < edit_start_date:
+                        st.error(
+                            "End Date cannot be earlier than Start Date."
+                        )
+
+                    else:
+                        try:
+                            with conn.session as s:
+
+                                # Check whether another term already
+                                # uses the edited term code.
+                                duplicate_term = s.execute(
+                                    text("""
+                                        SELECT term_id
+                                        FROM term
+                                        WHERE term_code = :term_code
+                                          AND term_id <> :term_id;
+                                    """),
+                                    {
+                                        "term_code": edit_term_code,
+                                        "term_id": editing_term_id
+                                    }
+                                ).fetchone()
+
+                                if duplicate_term:
+                                    st.error(
+                                        f"Academic term {edit_term_code} "
+                                        "already exists."
+                                    )
+
+                                else:
+                                    # Update the term
+                                    s.execute(
+                                        text("""
+                                            UPDATE term
+                                            SET
+                                                term_code = :term_code,
+                                                start_date = :start_date,
+                                                end_date = :end_date
+                                            WHERE term_id = :term_id;
+                                        """),
+                                        {
+                                            "term_code": edit_term_code,
+                                            "start_date": edit_start_date,
+                                            "end_date": edit_end_date,
+                                            "term_id": editing_term_id
+                                        }
+                                    )
+
+                                    s.commit()
+
+                                    log_security_event(
+                                        user["user_id"],
+                                        "ACADEMIC_TERM_UPDATED",
+                                        f"Updated academic term "
+                                        f"{edit_term_code} "
+                                        f"({edit_start_date} to "
+                                        f"{edit_end_date})."
+                                    )
+
+                                    st.session_state.editing_term_id = None
+
+                                    st.success(
+                                        f"Academic term {edit_term_code} "
+                                        "was successfully updated."
+                                    )
+
+                                    st.rerun()
+
+                        except Exception as e:
+                            st.error(
+                                f"Error updating academic term: {e}"
+                            )
+
+        except Exception as e:
+            st.error(
+                f"Error loading academic term: {e}"
+            )
+
+    # --------------------------------------------------------------
+    # ADD NEW TERM MODE
+    # --------------------------------------------------------------
+    else:
+
+        st.markdown("#### Add New Academic Term")
+
+        with st.form("add_academic_term_form"):
+
+            term_code = st.text_input(
+                "Term Code",
+                placeholder="e.g. 1Q2627",
+                help=(
+                    "Enter the official academic term code "
+                    "used by the institution."
+                )
+            ).strip().upper()
+
+            date_col1, date_col2 = st.columns(2)
+
+            with date_col1:
+                start_date = st.date_input(
+                    "Start Date",
+                    help="Official beginning date of the academic term."
+                )
+
+            with date_col2:
+                end_date = st.date_input(
+                    "End Date",
+                    help="Official ending date of the academic term."
+                )
+
+            submitted = st.form_submit_button(
+                "Add Academic Term",
+                type="primary",
+                use_container_width=True
+            )
+
+            if submitted:
+
+                # --------------------------------------------------
+                # VALIDATE NEW TERM
+                # --------------------------------------------------
+                if not term_code:
+                    st.error("Please enter a term code.")
+
+                elif not re.match(
+                    r"^\d[TQ]\d{4}$",
+                    term_code
+                ):
+                    st.error(
+                        "Invalid term code format. Use the format "
+                        "1T2526 or 1Q2627."
+                    )
+
+                elif end_date < start_date:
+                    st.error(
+                        "End Date cannot be earlier than Start Date."
+                    )
+
+                else:
+                    try:
+                        with conn.session as s:
+
+                            # Check for duplicate term code
+                            existing_term = s.execute(
+                                text("""
+                                    SELECT term_id
+                                    FROM term
+                                    WHERE term_code = :term_code;
+                                """),
+                                {
+                                    "term_code": term_code
+                                }
+                            ).fetchone()
+
+                            if existing_term:
+                                st.error(
+                                    f"Academic term {term_code} "
+                                    "already exists."
+                                )
+
+                            else:
+
+                                # Insert new term
+                                s.execute(
+                                    text("""
+                                        INSERT INTO term (
+                                            term_code,
+                                            start_date,
+                                            end_date
+                                        )
+                                        VALUES (
+                                            :term_code,
+                                            :start_date,
+                                            :end_date
+                                        );
+                                    """),
+                                    {
+                                        "term_code": term_code,
+                                        "start_date": start_date,
+                                        "end_date": end_date
+                                    }
+                                )
+
+                                s.commit()
+
+                                log_security_event(
+                                    user["user_id"],
+                                    "ACADEMIC_TERM_CREATED",
+                                    f"Created academic term "
+                                    f"{term_code} "
+                                    f"({start_date} to {end_date})."
+                                )
+
+                                st.success(
+                                    f"Academic term {term_code} "
+                                    "was successfully added."
+                                )
+
+                                st.rerun()
+
+                    except Exception as e:
+                        st.error(
+                            f"Error creating academic term: {e}"
+                        )
+
+    # --------------------------------------------------------------
+    # EXISTING TERMS
+    # --------------------------------------------------------------
+    st.divider()
+    st.markdown("#### Existing Academic Terms")
+
+    try:
+        terms_df = conn.query(
+            """
+            SELECT
+                term_id,
+                term_code,
+                start_date,
+                end_date
+            FROM term
+            ORDER BY start_date DESC NULLS LAST, term_code DESC;
+            """,
+            ttl=0
+        )
+
+        if terms_df.empty:
+            st.info("No academic terms have been configured yet.")
+
+        else:
+
+            for _, term_row in terms_df.iterrows():
+
+                term_id = int(term_row["term_id"])
+                term_code_display = str(term_row["term_code"])
+
+                start_display = (
+                    str(term_row["start_date"])
+                    if pd.notna(term_row["start_date"])
+                    else "Not set"
+                )
+
+                end_display = (
+                    str(term_row["end_date"])
+                    if pd.notna(term_row["end_date"])
+                    else "Not set"
+                )
+
+                term_col1, term_col2, term_col3, term_col4 = st.columns(
+                    [1.5, 2, 2, 1]
+                )
+
+                with term_col1:
+                    st.markdown(
+                        f"**{term_code_display}**"
+                    )
+
+                with term_col2:
+                    st.write(
+                        f"Start: {start_display}"
+                    )
+
+                with term_col3:
+                    st.write(
+                        f"End: {end_display}"
+                    )
+
+                with term_col4:
+                    if st.button(
+                        "✏️ Edit",
+                        key=f"edit_term_{term_id}",
+                        use_container_width=True
+                    ):
+                        st.session_state.editing_term_id = term_id
+                        st.rerun()
+
+                st.divider()
+
+    except Exception as e:
+        st.error(
+            f"Error loading academic terms: {e}"
+        )
     # --------------------------------------------------------------
     # EXISTING TERMS
     # --------------------------------------------------------------
