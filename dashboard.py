@@ -1524,9 +1524,8 @@ def render_student_profile(df_all):
                                     SELECT
                                         stg.stage_id,
                                         sts.status_id
-                                    FROM lifecycle_stage stg
-                                    JOIN lifecycle_status sts
-                                        ON sts.stage_id = stg.stage_id
+                                    FROM lifecycle_stage stg,
+                                         lifecycle_status sts
                                     WHERE stg.stage_name = :stage_name
                                       AND sts.status_name = :status_name;
                                 """)
