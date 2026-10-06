@@ -415,8 +415,8 @@ def load_students(
     return df, sync_time
 
 @st.cache_data(ttl=60)
-def fetch_student_courses(student_number: int) -> pd.DataFrame:
-    query = f"""
+def fetch_student_courses(student_number: int, selected_term_id: int | None = None) -> pd.DataFrame:
+    query = """
         SELECT 
             UPPER(e.course_code) AS "Course Code",
             COALESCE(c.course_name, 'Course Unit') AS "Course Name",
@@ -424,15 +424,16 @@ def fetch_student_courses(student_number: int) -> pd.DataFrame:
             INITCAP(e.status) AS "Status"
         FROM student_course_enrollments e
         LEFT JOIN courses c ON e.course_code = c.course_code
-        WHERE e.student_number = {int(student_number)}
+        WHERE e.student_number = :student_number
+          AND (:selected_term_id IS NULL OR e.term_id = :selected_term_id)
         ORDER BY e.course_code ASC;
     """
-    try: return conn.query(query, ttl=0)
+    try: return conn.query(query, params={"student_number": int(student_number), "selected_term_id": selected_term_id}, ttl=0)
     except Exception: return pd.DataFrame()
 
 @st.cache_data(ttl=60)
-def fetch_student_milestones(student_number: int) -> pd.DataFrame:
-    query = f"""
+def fetch_student_lifecycle(student_number: int, selected_term_id: int | None = None) -> pd.DataFrame:
+    query = """
         SELECT 
             stg.stage_name AS milestone_type,
             INITCAP(REPLACE(stg.stage_name, '_', ' ')) AS "Milestone",
@@ -441,19 +442,19 @@ def fetch_student_milestones(student_number: int) -> pd.DataFrame:
         FROM student_lifecycle_status sls
         JOIN lifecycle_stage stg ON sls.stage_id = stg.stage_id
         JOIN lifecycle_status sts ON sls.status_id = sts.status_id
-        WHERE sls.student_number = {int(student_number)}
+        WHERE sls.student_number = :student_number
+          AND (:selected_term_id IS NULL OR sls.term_id = :selected_term_id)
         ORDER BY stg.stage_id ASC;
     """
-    try: 
-        df = conn.query(query, ttl=0)
+    try:
+        df = conn.query(query, params={"student_number": int(student_number), "selected_term_id": selected_term_id}, ttl=0)
         if not df.empty and "Last Updated" in df.columns and df["Last Updated"].notna().any():
             dt = pd.to_datetime(df["Last Updated"], errors="coerce")
             if dt.dt.tz is None: dt = dt.dt.tz_localize("UTC")
             df["Last Updated"] = dt.dt.tz_convert("Asia/Manila").dt.strftime("%B %d, %Y at %I:%M %p")
         return df
-    except Exception: 
+    except Exception:
         return pd.DataFrame()
-
 # ------------------------------------------------------------------
 # SESSION STATE MANAGEMENT
 # ------------------------------------------------------------------
@@ -2122,7 +2123,7 @@ def render_student_profile(df_all):
     st.divider()
     st.markdown("#### Program Lifecycle Summary")
 
-    milestones_df = fetch_student_milestones(student["student_number"])
+    milestones_df = fetch_student_lifecycle(student["student_number"], st.session_state.get("selected_term_id"))
     
     ce_updated = "N/A"
     cap_updated = "N/A"
@@ -2160,13 +2161,13 @@ def render_student_profile(df_all):
 
     with tab_courses:
         st.markdown("##### Enrolled Curriculum & Course Records")
-        courses_df = fetch_student_courses(student["student_number"])
+        courses_df = fetch_student_courses(student["student_number"], st.session_state.get("selected_term_id"))
         if not courses_df.empty: st.dataframe(courses_df, hide_index=True, use_container_width=True)
         else: st.info("No course enrollment records populated for this student.")
 
     with tab_milestones:
         st.markdown("##### Milestone Clearances")
-        milestones_df = fetch_student_milestones(student["student_number"])
+        milestones_df = fetch_student_lifecycle(student["student_number"], st.session_state.get("selected_term_id"))
         if not milestones_df.empty: st.dataframe(milestones_df, hide_index=True, use_container_width=True)
         else: st.info("No milestone events recorded in `student_lifecycle_status`.")
 
@@ -2293,16 +2294,11 @@ def render_student_profile(df_all):
                                         status_id
                                     FROM student_lifecycle_status
                                     WHERE student_number = :sn
-                                      AND stage_id = :stage_id;
+                                      AND stage_id = :stage_id
+                                      AND term_id = :term_id;
                                 """)
 
-                                current_result = s.execute(
-                                    current_sql,
-                                    {
-                                        "sn": int(student["student_number"]),
-                                        "stage_id": stage_id
-                                    }
-                                ).fetchone()
+                                current_result = s.execute(current_sql, {"sn": int(student["student_number"]), "stage_id": stage_id, "term_id": st.session_state.get("selected_term_id")}).fetchone()
 
                                 if current_result:
                                     lifecycle_status_id = current_result.student_lifecycle_status_id
@@ -2358,30 +2354,25 @@ def render_student_profile(df_all):
                                             student_number,
                                             stage_id,
                                             status_id,
+                                            term_id,
                                             last_updated_date
                                         )
                                         VALUES (
                                             :sn,
                                             :stage_id,
                                             :new_status_id,
+                                            :term_id,
                                             NOW()
                                         );
                                     """)
 
-                                    s.execute(
-                                        insert_current_sql,
-                                        {
-                                            "sn": int(student["student_number"]),
-                                            "stage_id": stage_id,
-                                            "new_status_id": new_status_id
-                                        }
-                                    )
+                                    s.execute(insert_current_sql, {"sn": int(student["student_number"]), "stage_id": stage_id, "new_status_id": new_status_id, "term_id": st.session_state.get("selected_term_id")})
                             s.commit()
                         
                         log_security_event(user["user_id"], "STUDENT_RECORD_UPDATED", f"Modified record for Student ID {student['student_number']} (CW: {new_cw}, Exam: {new_ce}, Capstone: {new_cap}).")
                         st.success("Record successfully updated in Supabase!")
                         load_students.clear()
-                        fetch_student_milestones.clear()
+                        fetch_student_lifecycle.clear()
                         st.rerun()
                         
                     except Exception as err:
