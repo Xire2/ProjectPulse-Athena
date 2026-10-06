@@ -1753,37 +1753,33 @@ def render_student_list(df_all):
                 f"{remaining_students} out of {total_students} students"
             )
 
-    grad_color_mode = "normal"
-    comp_color_mode = "normal"
-    rem_color_mode = "inverse"
+        top_c1, top_c2, top_c3, top_c4 = st.columns(4)
 
-top_c1, top_c2, top_c3, top_c4 = st.columns(4)
+        top_c1.metric(
+            label="Total Students",
+            value=total_students,
+            help="Total students matching filters."
+        )
 
-top_c1.metric(
-    label="Total Students",
-    value=total_students,
-    help="Total students matching filters."
-)
+        top_c2.metric(
+            label="Coursework",
+            value=cw_completed,
+            help="Completed required core coursework."
+        )
 
-top_c2.metric(
-    label="Coursework",
-    value=cw_completed,
-    help="Completed required core coursework."
-)
+        top_c3.metric(
+            label="Comprehensive Exam",
+            value=exam_passed,
+            help="Passed Comprehensive Examination."
+        )
 
-top_c3.metric(
-    label="Comprehensive Exam",
-    value=exam_passed,
-    help="Passed Comprehensive Examination."
-)
+        top_c4.metric(
+            label="Capstones",
+            value=capstone_defended,
+            help="Defended and finalized Capstone project."
+        )
 
-top_c4.metric(
-    label="Capstones",
-    value=capstone_defended,
-    help="Defended and finalized Capstone project."
-)
-
-st.write("")
+        st.write("")
 
         st.markdown(
             """
