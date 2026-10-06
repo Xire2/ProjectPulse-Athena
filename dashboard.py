@@ -1520,8 +1520,6 @@ def render_student_profile(df_all):
                             ]
 
                             for stage_name, new_status_name in lifecycle_updates:
-
-                                # Get the stage ID and new status ID
                                 lookup_sql = text("""
                                     SELECT
                                         stg.stage_id,
@@ -1549,7 +1547,6 @@ def render_student_profile(df_all):
                                 stage_id = lookup_result.stage_id
                                 new_status_id = lookup_result.status_id
 
-                                # Get the student's current lifecycle status
                                 current_sql = text("""
                                     SELECT
                                         student_lifecycle_status_id,
@@ -1571,9 +1568,7 @@ def render_student_profile(df_all):
                                     lifecycle_status_id = current_result.student_lifecycle_status_id
                                     previous_status_id = current_result.status_id
 
-                                    # Only record history if the status actually changed
                                     if previous_status_id != new_status_id:
-
                                         history_sql = text("""
                                             INSERT INTO lifecycle_status_history (
                                                 student_lifecycle_status_id,
@@ -1601,7 +1596,6 @@ def render_student_profile(df_all):
                                             }
                                         )
 
-                                        # Update the current status
                                         update_sql = text("""
                                             UPDATE student_lifecycle_status
                                             SET
@@ -1619,7 +1613,6 @@ def render_student_profile(df_all):
                                         )
 
                                 else:
-                                    # No current record exists yet, so create it.
                                     insert_current_sql = text("""
                                         INSERT INTO student_lifecycle_status (
                                             student_number,
@@ -1642,8 +1635,9 @@ def render_student_profile(df_all):
                                             "stage_id": stage_id,
                                             "new_status_id": new_status_id
                                         }
-                                    )          
-                            
+                                    )    
+                                      
+                          s.commit()  
             # Update the current status
             update_sql = text("""
                 UPDATE student_lifecycle_status
