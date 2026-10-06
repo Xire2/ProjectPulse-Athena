@@ -419,7 +419,7 @@ if "admin_view" not in st.session_state:
 
 # 1. Define core app navigation options vs admin configuration options
 core_nav_options = ["Executive Dashboard", "Student Roster", "Student Profile Inspector"]
-admin_nav_options = ["Global Instance Settings", "Schema Mapping Config", "Permissions & Audit Logs"]
+admin_nav_options = ["Global Instance Settings", "Schema Mapping Config", "Permissions & Audit Logs", "Academic Terms"]
 
 # Ensure current view is valid
 all_valid_options = core_nav_options + (admin_nav_options if user["role"] == "IT/Admin" else [])
@@ -433,8 +433,9 @@ if user["role"] == "IT/Admin":
     with st.sidebar.expander("⚙️ Admin Configuration", expanded=is_currently_admin):
         admin_nav_config = {
             "Global Instance Settings": "GLOBAL INSTANCE SETTINGS",
-            "Schema Mapping Config": "SCHEMA MAPPING CONFIG",
-            "Permissions & Audit Logs": "PERMISSIONS & AUDIT LOGS"
+            "Schema Mapping Config": "SCHEMA MAPPING CONFIGURATION",
+            "Permissions & Audit Logs": "PERMISSIONS & AUDIT LOGS",
+            "Academic Terms": "ACADEMIC TERMS"
         }
         
         for opt in admin_nav_options:
@@ -786,7 +787,170 @@ def render_permissions_and_logs():
                 st.success("✅ System is healthy. No synchronization errors logged.")
         else:
             st.success("✅ System is healthy. No synchronization errors logged.")
+# ------------------------------------------------------------------
+# VIEW: IT/ADMIN ACADEMIC TERM MANAGEMENT
+# ------------------------------------------------------------------
+def render_academic_terms():
+    st.subheader("📅 Academic Terms")
+    st.caption("Create and maintain academic terms used by the dashboard for term-based filtering and historical reporting.")
 
+    # --------------------------------------------------------------
+    # ADD NEW TERM
+    # --------------------------------------------------------------
+    st.markdown("#### Add New Academic Term")
+
+    with st.form("add_academic_term_form"):
+        term_code = st.text_input(
+            "Term Code",
+            placeholder="e.g. 1Q2627",
+            help="Enter the official academic term code used by the institution."
+        ).strip().upper()
+
+        date_col1, date_col2 = st.columns(2)
+
+        with date_col1:
+            start_date = st.date_input(
+                "Start Date",
+                help="Official beginning date of the academic term."
+            )
+
+        with date_col2:
+            end_date = st.date_input(
+                "End Date",
+                help="Official ending date of the academic term."
+            )
+
+        submitted = st.form_submit_button(
+            "Add Academic Term",
+            type="primary",
+            use_container_width=True
+        )
+
+        if submitted:
+            # ------------------------------------------------------
+            # VALIDATION
+            # ------------------------------------------------------
+            if not term_code:
+                st.error("Please enter a term code.")
+
+            elif not re.match(r"^\d[TQ]\d{4}$", term_code):
+                st.error(
+                    "Invalid term code format. Use the format "
+                    "1T2526 or 1Q2627."
+                )
+
+            elif end_date < start_date:
+                st.error("End Date cannot be earlier than Start Date.")
+
+            else:
+                try:
+                    with conn.session as s:
+
+                        # Check whether the term already exists
+                        existing_term = s.execute(
+                            text("""
+                                SELECT term_id
+                                FROM term
+                                WHERE term_code = :term_code;
+                            """),
+                            {
+                                "term_code": term_code
+                            }
+                        ).fetchone()
+
+                        if existing_term:
+                            st.error(
+                                f"Academic term {term_code} already exists."
+                            )
+
+                        else:
+                            # Insert the new term
+                            s.execute(
+                                text("""
+                                    INSERT INTO term (
+                                        term_code,
+                                        start_date,
+                                        end_date
+                                    )
+                                    VALUES (
+                                        :term_code,
+                                        :start_date,
+                                        :end_date
+                                    );
+                                """),
+                                {
+                                    "term_code": term_code,
+                                    "start_date": start_date,
+                                    "end_date": end_date
+                                }
+                            )
+
+                            s.commit()
+
+                            log_security_event(
+                                user["user_id"],
+                                "ACADEMIC_TERM_CREATED",
+                                f"Created academic term {term_code} "
+                                f"({start_date} to {end_date})."
+                            )
+
+                            st.success(
+                                f"Academic term {term_code} was successfully added."
+                            )
+
+                            st.rerun()
+
+                except Exception as e:
+                    st.error(
+                        f"Error creating academic term: {e}"
+                    )
+
+    # --------------------------------------------------------------
+    # EXISTING TERMS
+    # --------------------------------------------------------------
+    st.divider()
+    st.markdown("#### Existing Academic Terms")
+
+    try:
+        terms_df = conn.query(
+            """
+            SELECT
+                term_id,
+                term_code,
+                start_date,
+                end_date
+            FROM term
+            ORDER BY start_date DESC NULLS LAST, term_code DESC;
+            """,
+            ttl=0
+        )
+
+        if terms_df.empty:
+            st.info("No academic terms have been configured yet.")
+
+        else:
+            display_terms_df = terms_df.copy()
+
+            display_terms_df = display_terms_df.rename(
+                columns={
+                    "term_id": "ID",
+                    "term_code": "Term Code",
+                    "start_date": "Start Date",
+                    "end_date": "End Date"
+                }
+            )
+
+            st.dataframe(
+                display_terms_df,
+                hide_index=True,
+                use_container_width=True
+            )
+
+    except Exception as e:
+        st.error(
+            f"Error loading academic terms: {e}"
+        )
+        
 def render_completion_trend_chart(df_all, active_program):
     if df_all.empty:
         st.info("No data available to display completion trends.")
@@ -1672,6 +1836,8 @@ elif st.session_state.admin_view == "Schema Mapping Config":
     render_schema_mapping()
 elif st.session_state.admin_view == "Permissions & Audit Logs":
     render_permissions_and_logs()
+elif st.session_state.admin_view == "Academic Terms":
+    render_academic_terms()
 else:
     try:
             df_all, last_sync = load_students(ACTIVE_PROGRAM)
