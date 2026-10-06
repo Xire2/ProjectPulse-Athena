@@ -1426,7 +1426,13 @@ def render_student_list(df_all):
         for col, label in zip(header_cols, header_labels):
             col.markdown(f'<div class="roster-th">{label}</div>', unsafe_allow_html=True)
         st.markdown('<div class="roster-th-divider"></div>', unsafe_allow_html=True)
-        for row in display_df.to_dict("records"):
+
+        if display_df.empty:
+            st.info("No students match the current filters.")
+        else:
+            with st.container(border=False, height=500):
+                
+for row in display_df.to_dict("records"):
     is_at_risk = str(row.get("Risk Status", "")).strip() == "At Risk"
 
     with st.container(border=is_at_risk):
@@ -1448,7 +1454,12 @@ def render_student_list(df_all):
         r_cols[7].markdown(f'<div style="{cell_bg} padding: 8px;"><span class="roster-cell-text">{display_date}</span></div>', unsafe_allow_html=True)
 
         risk_status = str(row.get("Risk Status", ""))
-        r_cols[8].markdown(f'<div style="{cell_bg} padding: 8px;">{"<span class=\"sr-risk-pill\">AT RISK</span>" if risk_status.strip() == "At Risk" else "<span class=\"sr-risk-none\">ON TRACK</span>"}</div>', unsafe_allow_html=True)
+        r_cols[8].markdown(
+            f'<div style="{cell_bg} padding: 8px;">'
+            f'{"<span class=\"sr-risk-pill\">AT RISK</span>" if risk_status.strip() == "At Risk" else "<span class=\"sr-risk-none\">ON TRACK</span>"}'
+            f'</div>',
+            unsafe_allow_html=True
+        )
 
         with r_cols[9]:
             st.button(
@@ -1460,12 +1471,6 @@ def render_student_list(df_all):
             )
 
     st.markdown('<div class="roster-row-divider"></div>', unsafe_allow_html=True)
-        if display_df.empty:
-            st.info("No students match the current filters.")
-        else:
-            with st.container(border=False, height=500):
-                
-
             st.caption(f"Showing {len(display_df)} students.")
 
     # Standardize data preparation for the grids
