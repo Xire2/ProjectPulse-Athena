@@ -294,6 +294,9 @@ def load_students(target_program: str) -> tuple[pd.DataFrame, str]:
                 a.full_name AS adviser, s.graduate_on_time, s.graduate_date_term_sy, 
                 s.remarks, s.created_at, c.cohort_code AS cohort, 
                 p.program_code AS program, p.program_name AS program_name,
+
+                et.term_id,
+
                 MAX(CASE WHEN stg.stage_name = 'coursework' THEN sts.status_name END) AS coursework_status,
                 MAX(CASE WHEN stg.stage_name = 'comprehensive_exam' THEN sts.status_name END) AS comprehensive_exam,
                 MAX(CASE WHEN stg.stage_name = 'capstone' THEN sts.status_name END) AS capstone,
@@ -301,17 +304,28 @@ def load_students(target_program: str) -> tuple[pd.DataFrame, str]:
                 MAX(CASE WHEN stg.stage_name = 'coursework' THEN sls.last_updated_date END) AS cw_updated_at,
                 MAX(CASE WHEN stg.stage_name = 'comprehensive_exam' THEN sls.last_updated_date END) AS ce_updated_at,
                 MAX(CASE WHEN stg.stage_name = 'capstone' THEN sls.last_updated_date END) AS cap_updated_at
+
             FROM students_normalized s
+
+            LEFT JOIN (
+                SELECT DISTINCT student_number, term_id
+                FROM student_course_enrollments
+                WHERE term_id IS NOT NULL
+            ) et
+                ON s.student_number = et.student_number
+
             LEFT JOIN cohort c ON s.cohort_id = c.cohort_id
             LEFT JOIN program p ON s.program_id = p.program_id
             LEFT JOIN advisers a ON s.adviser_id = a.adviser_id
             LEFT JOIN student_lifecycle_status sls ON s.student_number = sls.student_number
             LEFT JOIN lifecycle_stage stg ON sls.stage_id = stg.stage_id
             LEFT JOIN lifecycle_status sts ON sls.status_id = sts.status_id
+
             GROUP BY 
                 s.student_number, s.student_email, s.first_name, s.last_name, 
                 a.full_name, s.graduate_on_time, s.graduate_date_term_sy, 
-                s.remarks, s.created_at, c.cohort_code, p.program_code, p.program_name;
+                s.remarks, s.created_at, c.cohort_code, p.program_code, 
+                p.program_name, et.term_id;
         """
         df = conn.query(query, ttl=0)
     except Exception:
