@@ -1600,10 +1600,10 @@ if selected_adviser != "All":
         df_summary["adviser"].astype(str) == selected_adviser
     ]
             
-        total_students = len(df_summary)
-        cw_completed = len(df_summary[df_summary["coursework_display"] == "Completed"])
-        exam_passed = len(df_summary[df_summary["comprehensive_exam_display"] == "Passed"])
-        capstone_defended = len(df_summary[df_summary["capstone_display"] == "Defended"])
+total_students = len(df_summary)
+cw_completed = len(df_summary[df_summary["coursework_display"] == "Completed"])
+exam_passed = len(df_summary[df_summary["comprehensive_exam_display"] == "Passed"])
+capstone_defended = len(df_summary[df_summary["capstone_display"] == "Defended"])
 
         evaluated_df = df_summary[
             df_summary["graduate_on_time"].notna() & 
