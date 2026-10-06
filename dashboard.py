@@ -2417,7 +2417,10 @@ elif st.session_state.admin_view == "Academic Terms":
     render_academic_terms()
 else:
     try:
-            df_all, last_sync = load_students(ACTIVE_PROGRAM)
+            df_all, last_sync = load_students(
+                ACTIVE_PROGRAM,
+                st.session_state.get("selected_term_id")
+            )
             st.session_state.consecutive_sync_failures = 0
             st.caption(f"🕒 **Data Last Synchronized:** `{last_sync}`")
             
