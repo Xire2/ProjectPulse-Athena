@@ -1513,95 +1513,137 @@ def render_student_profile(df_all):
                                 """),
                                 {"rem": new_remarks, "adv": adv_id, "sn": int(student["student_number"])}
                             )
+                                              lifecycle_updates = [
+                                ("coursework", cw_val),
+                                ("comprehensive_exam", ce_val),
+                                ("capstone", cap_val)
+                            ]
+
+                            for stage_name, new_status_name in lifecycle_updates:
+
+                                # Get the stage ID and new status ID
+                                lookup_sql = text("""
+                                    SELECT
+                                        stg.stage_id,
+                                        sts.status_id
+                                    FROM lifecycle_stage stg
+                                    JOIN lifecycle_status sts
+                                        ON sts.stage_id = stg.stage_id
+                                    WHERE stg.stage_name = :stage_name
+                                      AND sts.status_name = :status_name;
+                                """)
+
+                                lookup_result = s.execute(
+                                    lookup_sql,
+                                    {
+                                        "stage_name": stage_name,
+                                        "status_name": new_status_name
+                                    }
+                                ).fetchone()
+
+                                if not lookup_result:
+                                    raise ValueError(
+                                        f"Invalid lifecycle status: {stage_name} → {new_status_name}"
+                                    )
+
+                                stage_id = lookup_result.stage_id
+                                new_status_id = lookup_result.status_id
+
+                                # Get the student's current lifecycle status
+                                current_sql = text("""
+                                    SELECT
+                                        student_lifecycle_status_id,
+                                        status_id
+                                    FROM student_lifecycle_status
+                                    WHERE student_number = :sn
+                                      AND stage_id = :stage_id;
+                                """)
+
+                                current_result = s.execute(
+                                    current_sql,
+                                    {
+                                        "sn": int(student["student_number"]),
+                                        "stage_id": stage_id
+                                    }
+                                ).fetchone()
+
+                                if current_result:
+                                    lifecycle_status_id = current_result.student_lifecycle_status_id
+                                    previous_status_id = current_result.status_id
+
+                                    # Only record history if the status actually changed
+                                    if previous_status_id != new_status_id:
+
+                                        history_sql = text("""
+                                            INSERT INTO lifecycle_status_history (
+                                                student_lifecycle_status_id,
+                                                previous_status_id,
+                                                new_status_id,
+                                                changed_by,
+                                                updated_date
+                                            )
+                                            VALUES (
+                                                :lifecycle_status_id,
+                                                :previous_status_id,
+                                                :new_status_id,
+                                                :changed_by,
+                                                NOW()
+                                            );
+                                        """)
+
+                                        s.execute(
+                                            history_sql,
+                                            {
+                                                "lifecycle_status_id": lifecycle_status_id,
+                                                "previous_status_id": previous_status_id,
+                                                "new_status_id": new_status_id,
+                                                "changed_by": user["user_id"]
+                                            }
+                                        )
+
+                                        # Update the current status
+                                        update_sql = text("""
+                                            UPDATE student_lifecycle_status
+                                            SET
+                                                status_id = :new_status_id,
+                                                last_updated_date = NOW()
+                                            WHERE student_lifecycle_status_id = :lifecycle_status_id;
+                                        """)
+
+                                        s.execute(
+                                            update_sql,
+                                            {
+                                                "new_status_id": new_status_id,
+                                                "lifecycle_status_id": lifecycle_status_id
+                                            }
+                                        )
+
+                                else:
+                                    # No current record exists yet, so create it.
+                                    insert_current_sql = text("""
+                                        INSERT INTO student_lifecycle_status (
+                                            student_number,
+                                            stage_id,
+                                            status_id,
+                                            last_updated_date
+                                        )
+                                        VALUES (
+                                            :sn,
+                                            :stage_id,
+                                            :new_status_id,
+                                            NOW()
+                                        );
+                                    """)
+
+                                    s.execute(
+                                        insert_current_sql,
+                                        {
+                                            "sn": int(student["student_number"]),
+                                            "stage_id": stage_id,
+                                            "new_status_id": new_status_id
+                                        }
+                                    )          
                             
-                            lifecycle_updates = [
-    ("coursework", cw_val),
-    ("comprehensive_exam", ce_val),
-    ("capstone", cap_val)
-]
-
-for stage_name, new_status_name in lifecycle_updates:
-
-    # Get the stage ID and new status ID
-    lookup_sql = text("""
-        SELECT
-            stg.stage_id,
-            sts.status_id
-        FROM lifecycle_stage stg
-        JOIN lifecycle_status sts
-            ON sts.stage_id = stg.stage_id
-        WHERE stg.stage_name = :stage_name
-          AND sts.status_name = :status_name;
-    """)
-
-    lookup_result = s.execute(
-        lookup_sql,
-        {
-            "stage_name": stage_name,
-            "status_name": new_status_name
-        }
-    ).fetchone()
-
-    if not lookup_result:
-        raise ValueError(
-            f"Invalid lifecycle status: {stage_name} → {new_status_name}"
-        )
-
-    stage_id = lookup_result.stage_id
-    new_status_id = lookup_result.status_id
-
-    # Get the student's current lifecycle status
-    current_sql = text("""
-        SELECT
-            student_lifecycle_status_id,
-            status_id
-        FROM student_lifecycle_status
-        WHERE student_number = :sn
-          AND stage_id = :stage_id;
-    """)
-
-    current_result = s.execute(
-        current_sql,
-        {
-            "sn": int(student["student_number"]),
-            "stage_id": stage_id
-        }
-    ).fetchone()
-
-    if current_result:
-        lifecycle_status_id = current_result.student_lifecycle_status_id
-        previous_status_id = current_result.status_id
-
-        # Only record history if the status actually changed
-        if previous_status_id != new_status_id:
-
-            history_sql = text("""
-                INSERT INTO lifecycle_status_history (
-                    student_lifecycle_status_id,
-                    previous_status_id,
-                    new_status_id,
-                    changed_by,
-                    updated_date
-                )
-                VALUES (
-                    :lifecycle_status_id,
-                    :previous_status_id,
-                    :new_status_id,
-                    :changed_by,
-                    NOW()
-                );
-            """)
-
-            s.execute(
-                history_sql,
-                {
-                    "lifecycle_status_id": lifecycle_status_id,
-                    "previous_status_id": previous_status_id,
-                    "new_status_id": new_status_id,
-                    "changed_by": user["user_id"]
-                }
-            )
-
             # Update the current status
             update_sql = text("""
                 UPDATE student_lifecycle_status
