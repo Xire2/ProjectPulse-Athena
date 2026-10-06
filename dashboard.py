@@ -1513,7 +1513,7 @@ def render_student_profile(df_all):
                                 """),
                                 {"rem": new_remarks, "adv": adv_id, "sn": int(student["student_number"])}
                             )
-                                              lifecycle_updates = [
+                            lifecycle_updates = [
                                 ("coursework", cw_val),
                                 ("comprehensive_exam", ce_val),
                                 ("capstone", cap_val)
