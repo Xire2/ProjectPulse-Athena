@@ -1605,22 +1605,22 @@ cw_completed = len(df_summary[df_summary["coursework_display"] == "Completed"])
 exam_passed = len(df_summary[df_summary["comprehensive_exam_display"] == "Passed"])
 capstone_defended = len(df_summary[df_summary["capstone_display"] == "Defended"])
 
-        evaluated_df = df_summary[
-            df_summary["graduate_on_time"].notna() & 
-            (df_summary["graduate_on_time"].astype(str).str.strip() != "") &
-            (~df_summary["graduate_on_time"].astype(str).str.lower().isin(["n/a", "none"]))
-        ]
-        grad_numerator = len(evaluated_df[evaluated_df["graduate_on_time"].astype(str).str.lower().isin(["yes", "y", "true", "1"])])
-        grad_denominator = total_students
-        on_time_rate = (grad_numerator / grad_denominator * 100) if grad_denominator > 0 else 0.0
+evaluated_df = df_summary[
+    df_summary["graduate_on_time"].notna() & 
+    (df_summary["graduate_on_time"].astype(str).str.strip() != "") &
+    (~df_summary["graduate_on_time"].astype(str).str.lower().isin(["n/a", "none"]))
+]
+grad_numerator = len(evaluated_df[evaluated_df["graduate_on_time"].astype(str).str.lower().isin(["yes", "y", "true", "1"])])
+grad_denominator = total_students
+on_time_rate = (grad_numerator / grad_denominator * 100) if grad_denominator > 0 else 0.0
 
-        fully_completed = len(
-            df_summary[
-                (df_summary["coursework_display"] == "Completed") & 
-                (df_summary["comprehensive_exam_display"] == "Passed") & 
-                (df_summary["capstone_display"] == "Defended")
-            ]
-        )
+fully_completed = len(
+    df_summary[
+        (df_summary["coursework_display"] == "Completed") & 
+        (df_summary["comprehensive_exam_display"] == "Passed") & 
+        (df_summary["capstone_display"] == "Defended")
+    ]
+)
         completion_rate = int((fully_completed / total_students * 100)) if total_students > 0 else 0
 
         remaining_students = int(total_students - fully_completed)
