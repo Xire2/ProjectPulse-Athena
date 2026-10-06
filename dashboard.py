@@ -269,7 +269,10 @@ def get_cohort_val(c):
     return float(f"{m.group(2)}{m.group(3)}.{m.group(1)}") if m else 0.0
 
 @st.cache_data(ttl=60, show_spinner="Loading mapped student roster...")
-def load_students(target_program: str) -> tuple[pd.DataFrame, str]:
+def load_students(
+    target_program: str,
+    selected_term_id: int | None = None
+) -> tuple[pd.DataFrame, str]:
     # 1. Fetch Program-Specific Thresholds
     try:
         t_query = text("""
@@ -317,7 +320,12 @@ def load_students(target_program: str) -> tuple[pd.DataFrame, str]:
             LEFT JOIN cohort c ON s.cohort_id = c.cohort_id
             LEFT JOIN program p ON s.program_id = p.program_id
             LEFT JOIN advisers a ON s.adviser_id = a.adviser_id
-            LEFT JOIN student_lifecycle_status sls ON s.student_number = sls.student_number
+            LEFT JOIN student_lifecycle_status sls
+                ON s.student_number = sls.student_number
+                AND (
+                    :selected_term_id IS NULL
+                    OR sls.term_id = :selected_term_id
+                )
             LEFT JOIN lifecycle_stage stg ON sls.stage_id = stg.stage_id
             LEFT JOIN lifecycle_status sts ON sls.status_id = sts.status_id
 
@@ -327,7 +335,11 @@ def load_students(target_program: str) -> tuple[pd.DataFrame, str]:
                 s.remarks, s.created_at, c.cohort_code, p.program_code, 
                 p.program_name, et.term_id;
         """
-        df = conn.query(query, ttl=0)
+        df = conn.query(
+            query,
+            params={"selected_term_id": selected_term_id},
+            ttl=0
+        )
     except Exception:
         df = pd.DataFrame()
     
