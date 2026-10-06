@@ -1450,8 +1450,10 @@ def render_student_list(df_all):
             "overall_status": "Overall Status", "coursework_display": "Coursework",
             "comprehensive_exam_display": "Comprehensive Exam", "capstone_display": "Capstone", "adviser": "Adviser", "student_email": "Email", "coursework_updated_at": "Last Update"
         })
-# --- Dashboard Filters (No Search or Sort) ---
-term_col, cohort_col, adv_col = st.columns(3)
+    # --- RENDER EXECUTIVE DASHBOARD ---
+    if st.session_state.admin_view == "Executive Dashboard":
+        # --- Dashboard Filters (No Search or Sort) ---
+        term_col, cohort_col, adv_col = st.columns(3)
 
 # =========================================================
 # TERM FILTER
