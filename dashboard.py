@@ -1757,43 +1757,6 @@ def render_student_list(df_all):
     comp_color_mode = "normal"
     rem_color_mode = "inverse"
 
-else:
-    grad_delta_str = (
-        f"{grad_numerator} out of {total_students} students"
-    )
-
-    comp_delta_str = (
-        f"{fully_completed} out of {total_students} students"
-    )
-
-    rem_delta_str = (
-        f"{remaining_students} out of {total_students} students"
-    )
-
-    grad_color_mode = (
-        "normal"
-        if on_time_rate >= 50
-        else "inverse"
-    )
-
-    comp_color_mode = (
-        "normal"
-        if completion_rate >= 50
-        else "inverse"
-    )
-
-    rem_percentage = (
-        remaining_students / total_students * 100
-        if total_students > 0
-        else 0
-    )
-
-    rem_color_mode = (
-        "inverse"
-        if rem_percentage > 50
-        else "normal"
-    )
-
 top_c1, top_c2, top_c3, top_c4 = st.columns(4)
 
 top_c1.metric(
