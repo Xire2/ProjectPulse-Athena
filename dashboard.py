@@ -1455,250 +1455,303 @@ def render_student_list(df_all):
         # --- Dashboard Filters (No Search or Sort) ---
         term_col, cohort_col, adv_col = st.columns(3)
 
-# =========================================================
-# TERM FILTER
-# =========================================================
-with term_col:
-    available_terms_df = load_available_terms()
-    current_term = get_current_term()
+        # =========================================================
+        # TERM FILTER
+        # =========================================================
+        with term_col:
+            available_terms_df = load_available_terms()
+            current_term = get_current_term()
 
-    if available_terms_df.empty:
-        st.warning("No academic terms are currently available.")
-        selected_term_id = None
-        selected_term_code = None
+            if available_terms_df.empty:
+                st.warning("No academic terms are currently available.")
+                selected_term_id = None
+                selected_term_code = None
 
-    else:
-        term_options = available_terms_df["term_id"].tolist()
-
-        # Default to the current term
-        if "selected_term_id" not in st.session_state:
-            if current_term is not None:
-                st.session_state.selected_term_id = int(
-                    current_term["term_id"]
-                )
             else:
-                st.session_state.selected_term_id = int(
-                    term_options[0]
+                term_options = available_terms_df["term_id"].tolist()
+
+                # Default to the current term
+                if "selected_term_id" not in st.session_state:
+                    if current_term is not None:
+                        st.session_state.selected_term_id = int(
+                            current_term["term_id"]
+                        )
+                    else:
+                        st.session_state.selected_term_id = int(
+                            term_options[0]
+                        )
+
+                # Make sure saved selection still exists
+                if st.session_state.selected_term_id not in term_options:
+                    st.session_state.selected_term_id = int(
+                        current_term["term_id"]
+                        if current_term is not None
+                        else term_options[0]
+                    )
+
+                selected_term_id = st.selectbox(
+                    "Filter by term",
+                    options=term_options,
+                    index=term_options.index(
+                        st.session_state.selected_term_id
+                    ),
+                    format_func=lambda term_id: format_term_label(
+                        available_terms_df.loc[
+                            available_terms_df["term_id"] == term_id,
+                            "term_code"
+                        ].iloc[0]
+                    ),
+                    key="dashboard_term_filter"
                 )
 
-        # Make sure saved selection still exists
-        if st.session_state.selected_term_id not in term_options:
-            st.session_state.selected_term_id = int(
-                current_term["term_id"]
-                if current_term is not None
-                else term_options[0]
-            )
+                st.session_state.selected_term_id = selected_term_id
 
-        selected_term_id = st.selectbox(
-            "Filter by term",
-            options=term_options,
-            index=term_options.index(
-                st.session_state.selected_term_id
-            ),
-            format_func=lambda term_id: format_term_label(
-                available_terms_df.loc[
-                    available_terms_df["term_id"] == term_id,
+                selected_term_code = available_terms_df.loc[
+                    available_terms_df["term_id"] == selected_term_id,
                     "term_code"
                 ].iloc[0]
-            ),
-            key="dashboard_term_filter"
+
+        # =========================================================
+        # COHORT FILTER
+        # =========================================================
+        with cohort_col:
+            valid_cohorts = sorted(
+                [
+                    str(c)
+                    for c in df_all["cohort"].dropna().unique().tolist()
+                    if str(c).strip()
+                ],
+                key=get_cohort_val
+            )
+
+            selected_cohort = st.selectbox(
+                "Filter by cohort",
+                ["All"] + valid_cohorts,
+                key="cohort_filter"
+            )
+
+        # =========================================================
+        # ADVISER FILTER
+        # =========================================================
+        with adv_col:
+            valid_advisers = sorted(
+                [
+                    str(a)
+                    for a in df_all["adviser"].dropna().unique().tolist()
+                    if str(a).strip()
+                ]
+            )
+
+            current_user = st.session_state.user_info.get("full_name", "")
+            user_role = st.session_state.user_info.get("role", "")
+
+            if "Advisor" in user_role or "Faculty" in user_role:
+                adv_view = st.selectbox(
+                    "Adviser View",
+                    ["My Advisees", "All Students"],
+                    key="adv_view_toggle"
+                )
+
+                selected_adviser = (
+                    current_user
+                    if adv_view == "My Advisees"
+                    else "All"
+                )
+            else:
+                default_idx = (
+                    valid_advisers.index(current_user) + 1
+                    if current_user in valid_advisers
+                    else 0
+                )
+
+                selected_adviser = st.selectbox(
+                    "Filter by Adviser",
+                    ["All"] + valid_advisers,
+                    index=default_idx,
+                    key="adviser_filter"
+                )
+
+        # =========================================================
+        # SELECTED TERM HEADING
+        # =========================================================
+        if selected_term_code:
+            st.markdown(
+                f"#### {format_term_label(selected_term_code)}"
+            )
+
+        # =========================================================
+        # APPLY COHORT + ADVISER FILTERS
+        # =========================================================
+        df_summary = df_all.copy()
+
+        if selected_term_id is not None:
+            df_summary = df_summary[
+                df_summary["term_id"] == selected_term_id
+            ]
+
+        if selected_cohort != "All":
+            df_summary = df_summary[
+                df_summary["cohort"].astype(str) == selected_cohort
+            ]
+
+        if selected_adviser != "All":
+            df_summary = df_summary[
+                df_summary["adviser"].astype(str) == selected_adviser
+            ]
+
+        total_students = len(df_summary)
+        cw_completed = len(
+            df_summary[df_summary["coursework_display"] == "Completed"]
+        )
+        exam_passed = len(
+            df_summary[df_summary["comprehensive_exam_display"] == "Passed"]
+        )
+        capstone_defended = len(
+            df_summary[df_summary["capstone_display"] == "Defended"]
         )
 
-        st.session_state.selected_term_id = selected_term_id
-
-        selected_term_code = available_terms_df.loc[
-            available_terms_df["term_id"] == selected_term_id,
-            "term_code"
-        ].iloc[0]
-
-
-# =========================================================
-# COHORT FILTER
-# =========================================================
-with cohort_col:
-    valid_cohorts = sorted(
-        [
-            str(c)
-            for c in df_all["cohort"].dropna().unique().tolist()
-            if str(c).strip()
-        ],
-        key=get_cohort_val
-    )
-
-    selected_cohort = st.selectbox(
-        "Filter by cohort",
-        ["All"] + valid_cohorts,
-        key="cohort_filter"
-    )
-
-
-# =========================================================
-# ADVISER FILTER
-# =========================================================
-with adv_col:
-    valid_advisers = sorted(
-        [
-            str(a)
-            for a in df_all["adviser"].dropna().unique().tolist()
-            if str(a).strip()
+        evaluated_df = df_summary[
+            df_summary["graduate_on_time"].notna() &
+            (df_summary["graduate_on_time"].astype(str).str.strip() != "") &
+            (~df_summary["graduate_on_time"].astype(str).str.lower().isin(
+                ["n/a", "none"]
+            ))
         ]
-    )
 
-    current_user = st.session_state.user_info.get("full_name", "")
-    user_role = st.session_state.user_info.get("role", "")
-
-    if "Advisor" in user_role or "Faculty" in user_role:
-        adv_view = st.selectbox(
-            "Adviser View",
-            ["My Advisees", "All Students"],
-            key="adv_view_toggle"
+        grad_numerator = len(
+            evaluated_df[
+                evaluated_df["graduate_on_time"]
+                .astype(str)
+                .str.lower()
+                .isin(["yes", "y", "true", "1"])
+            ]
         )
 
-        selected_adviser = (
-            current_user
-            if adv_view == "My Advisees"
-            else "All"
+        grad_denominator = total_students
+
+        on_time_rate = (
+            grad_numerator / grad_denominator * 100
+            if grad_denominator > 0
+            else 0.0
         )
-    else:
-        default_idx = (
-            valid_advisers.index(current_user) + 1
-            if current_user in valid_advisers
+
+        fully_completed = len(
+            df_summary[
+                (df_summary["coursework_display"] == "Completed") &
+                (df_summary["comprehensive_exam_display"] == "Passed") &
+                (df_summary["capstone_display"] == "Defended")
+            ]
+        )
+
+        completion_rate = (
+            int((fully_completed / total_students * 100))
+            if total_students > 0
             else 0
         )
-        selected_adviser = st.selectbox(
-            "Filter by Adviser",
-            ["All"] + valid_advisers,
-            index=default_idx,
-            key="adviser_filter"
+
+        remaining_students = int(total_students - fully_completed)
+        missing_coursework = len(
+            df_summary[df_summary["coursework_display"] != "Completed"]
         )
-# =========================================================
-# SELECTED TERM HEADING
-# =========================================================
-if selected_term_code:
-    st.markdown(
-        f"#### {format_term_label(selected_term_code)}"
-    )
+        missing_exam = len(
+            df_summary[df_summary["comprehensive_exam_display"] != "Passed"]
+        )
+        missing_capstone = len(
+            df_summary[df_summary["capstone_display"] != "Defended"]
+        )
 
+        # --- TERM-OVER-TERM COMPARISON LOGIC ---
+        all_cohorts_sorted = sorted(
+            [
+                str(c)
+                for c in df_all["cohort"].dropna().unique()
+                if str(c).strip()
+            ],
+            key=get_cohort_val
+        )
 
-# =========================================================
-# APPLY COHORT + ADVISER FILTERS
-# =========================================================
-df_summary = df_all.copy()
-if selected_term_id is not None:
-    df_summary = df_summary[
-        df_summary["term_id"] == selected_term_id
-    ]
-if selected_cohort != "All":
-    df_summary = df_summary[
-        df_summary["cohort"].astype(str) == selected_cohort
-    ]
+        prior_cohort = None
 
-if selected_adviser != "All":
-    df_summary = df_summary[
-        df_summary["adviser"].astype(str) == selected_adviser
-    ]
-            
-total_students = len(df_summary)
-cw_completed = len(df_summary[df_summary["coursework_display"] == "Completed"])
-exam_passed = len(df_summary[df_summary["comprehensive_exam_display"] == "Passed"])
-capstone_defended = len(df_summary[df_summary["capstone_display"] == "Defended"])
+        if selected_cohort != "All" and selected_cohort in all_cohorts_sorted:
+            idx = all_cohorts_sorted.index(selected_cohort)
 
-evaluated_df = df_summary[
-    df_summary["graduate_on_time"].notna() & 
-    (df_summary["graduate_on_time"].astype(str).str.strip() != "") &
-    (~df_summary["graduate_on_time"].astype(str).str.lower().isin(["n/a", "none"]))
-]
-grad_numerator = len(evaluated_df[evaluated_df["graduate_on_time"].astype(str).str.lower().isin(["yes", "y", "true", "1"])])
-grad_denominator = total_students
-on_time_rate = (grad_numerator / grad_denominator * 100) if grad_denominator > 0 else 0.0
+            if idx > 0:
+                prior_cohort = all_cohorts_sorted[idx - 1]
 
-fully_completed = len(
-    df_summary[
-        (df_summary["coursework_display"] == "Completed") & 
-        (df_summary["comprehensive_exam_display"] == "Passed") & 
-        (df_summary["capstone_display"] == "Defended")
-    ]
-)
-completion_rate = int((fully_completed / total_students * 100)) if total_students > 0 else 0
+        if prior_cohort:
+            df_prior = df_all[
+                df_all["cohort"].astype(str) == prior_cohort
+            ]
 
-remaining_students = int(total_students - fully_completed)
-missing_coursework = len(df_summary[df_summary["coursework_display"] != "Completed"])
-missing_exam = len(df_summary[df_summary["comprehensive_exam_display"] != "Passed"])
-missing_capstone = len(df_summary[df_summary["capstone_display"] != "Defended"])
+            p_total = len(df_prior)
 
-# --- TERM-OVER-TERM COMPARISON LOGIC ---
-all_cohorts_sorted = sorted(
-    [
-        str(c)
-        for c in df_all["cohort"].dropna().unique()
-        if str(c).strip()
-    ],
-    key=get_cohort_val
-)
+            p_eval = df_prior[
+                df_prior["graduate_on_time"].notna() &
+                (df_prior["graduate_on_time"].astype(str).str.strip() != "") &
+                (~df_prior["graduate_on_time"].astype(str).str.lower().isin(
+                    ["n/a", "none"]
+                ))
+            ]
 
-prior_cohort = None
+            p_grad_num = len(
+                p_eval[
+                    p_eval["graduate_on_time"]
+                    .astype(str)
+                    .str.lower()
+                    .isin(["yes", "y", "true", "1"])
+                ]
+            )
 
-if selected_cohort != "All" and selected_cohort in all_cohorts_sorted:
-    idx = all_cohorts_sorted.index(selected_cohort)
+            p_on_time_rate = (
+                p_grad_num / p_total * 100
+                if p_total > 0
+                else 0.0
+            )
 
-    if idx > 0:
-        prior_cohort = all_cohorts_sorted[idx - 1]
+            p_comp = len(
+                df_prior[
+                    (df_prior["coursework_display"] == "Completed") &
+                    (df_prior["comprehensive_exam_display"] == "Passed") &
+                    (df_prior["capstone_display"] == "Defended")
+                ]
+            )
 
-if prior_cohort:
-    df_prior = df_all[
-        df_all["cohort"].astype(str) == prior_cohort
-    ]
+            p_comp_rate = (
+                int((p_comp / p_total * 100))
+                if p_total > 0
+                else 0.0
+            )
 
-    p_total = len(df_prior)
+            p_rem = p_total - p_comp
 
-    p_eval = df_prior[
-        df_prior["graduate_on_time"].notna() &
-        (df_prior["graduate_on_time"].astype(str).str.strip() != "") &
-        (~df_prior["graduate_on_time"].astype(str).str.lower().isin(["n/a", "none"]))
-    ]
+            grad_delta_str = (
+                f"{on_time_rate - p_on_time_rate:+.1f}% vs {prior_cohort}"
+            )
 
-    p_grad_num = len(
-        p_eval[
-            p_eval["graduate_on_time"]
-            .astype(str)
-            .str.lower()
-            .isin(["yes", "y", "true", "1"])
-        ]
-    )
+            comp_delta_str = (
+                f"{completion_rate - p_comp_rate:+.0f}% vs {prior_cohort}"
+            )
 
-    p_on_time_rate = (
-        p_grad_num / p_total * 100
-        if p_total > 0
-        else 0.0
-    )
+            rem_delta_str = (
+                f"{remaining_students - p_rem:+} vs {prior_cohort}"
+            )
 
-    p_comp = len(
-        df_prior[
-            (df_prior["coursework_display"] == "Completed") &
-            (df_prior["comprehensive_exam_display"] == "Passed") &
-            (df_prior["capstone_display"] == "Defended")
-        ]
-    )
+            grad_color_mode = "normal"
+            comp_color_mode = "normal"
+            rem_color_mode = "inverse"
 
-    p_comp_rate = (
-        int((p_comp / p_total * 100))
-        if p_total > 0
-        else 0.0
-    )
+        else:
+            grad_delta_str = (
+                f"{grad_numerator} out of {total_students} students"
+            )
 
-    p_rem = p_total - p_comp
+            comp_delta_str = (
+                f"{fully_completed} out of {total_students} students"
+            )
 
-    grad_delta_str = (
-        f"{on_time_rate - p_on_time_rate:+.1f}% vs {prior_cohort}"
-    )
-
-    comp_delta_str = (
-        f"{completion_rate - p_comp_rate:+.0f}% vs {prior_cohort}"
-    )
-
-    rem_delta_str = (
-        f"{remaining_students - p_rem:+} vs {prior_cohort}"
-    )
+            rem_delta_str = (
+                f"{remaining_students} out of {total_students} students"
+            )
 
     grad_color_mode = "normal"
     comp_color_mode = "normal"
