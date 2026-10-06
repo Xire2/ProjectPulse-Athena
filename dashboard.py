@@ -394,7 +394,7 @@ def load_students(
 
     df['risk_details'] = df.apply(calculate_risk, axis=1)
     df['is_at_risk'] = df['risk_details'] != ""
-    df['risk_flag'] = df['is_at_risk'].apply(lambda x: "Flagged" if x else "On Track")
+    df['risk_flag'] = df['is_at_risk'].apply(lambda x: "At Risk" if x else "On Track")
 
     # Time parsing
     def to_manila_time(series):
@@ -1402,7 +1402,7 @@ def render_student_list(df_all):
         .status-pill { background-color: #f0f2f6; padding: 4px 8px; border-radius: 12px; font-size: 0.8rem; color: #31333F !important; font-weight: 600; }
         .sr-risk-pill { background-color: #D500001A; color: #D50000; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
         .sr-risk-none { background-color: #0080001A; color: #008000; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
-        
+        .sr-risk-row {background-color: #FDE2E2 !important; border-radius: 6px; }
         /* Force standard buttons to allow multi-line text */
         div[data-testid="stButton"] button p {
             white-space: normal !important;
@@ -1432,6 +1432,7 @@ def render_student_list(df_all):
         else:
             with st.container(border=False, height=500):
                 for row in display_df.to_dict("records"):
+                    is_at_risk = str(row.get("Risk Status", "")).strip() == "At Risk"
                     r_cols = st.columns(col_widths, vertical_alignment="center")
                     
                     r_cols[0].markdown(f'<span class="roster-cell-id">{row.get("Student ID", "")}</span>', unsafe_allow_html=True)
@@ -1448,10 +1449,7 @@ def render_student_list(df_all):
                     r_cols[7].markdown(f'<span class="roster-cell-text">{display_date}</span>', unsafe_allow_html=True)
                     
                     risk_status = str(row.get("Risk Status", ""))
-                    if risk_status.strip() == "Flagged":
-                        r_cols[8].markdown('<span class="sr-risk-pill">FLAGGED</span>', unsafe_allow_html=True)
-                    else:
-                        r_cols[8].markdown('<span class="sr-risk-none">ON TRACK</span>', unsafe_allow_html=True)
+                    r_cols[8].markdown('<span class="sr-risk-pill">AT RISK</span>' if risk_status.strip() == "At Risk" else '<span class="sr-risk-none">ON TRACK</span>', unsafe_allow_html=True)
                     
                     with r_cols[9]:
                         # Using on_click completely circumvents the instantiation error
