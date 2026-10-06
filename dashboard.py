@@ -1557,22 +1557,18 @@ with adv_col:
             if adv_view == "My Advisees"
             else "All"
         )
-
     else:
         default_idx = (
             valid_advisers.index(current_user) + 1
             if current_user in valid_advisers
             else 0
         )
-
         selected_adviser = st.selectbox(
             "Filter by Adviser",
             ["All"] + valid_advisers,
             index=default_idx,
             key="adviser_filter"
         )
-
-
 # =========================================================
 # SELECTED TERM HEADING
 # =========================================================
@@ -1628,60 +1624,148 @@ missing_coursework = len(df_summary[df_summary["coursework_display"] != "Complet
 missing_exam = len(df_summary[df_summary["comprehensive_exam_display"] != "Passed"])
 missing_capstone = len(df_summary[df_summary["capstone_display"] != "Defended"])
 
-        # --- TERM-OVER-TERM COMPARISON LOGIC ---
-        all_cohorts_sorted = sorted([str(c) for c in df_all["cohort"].dropna().unique() if str(c).strip()], key=get_cohort_val)
-        
-        prior_cohort = None
-        if active_cohort != "All" and active_cohort in all_cohorts_sorted:
-            idx = all_cohorts_sorted.index(active_cohort)
-            if idx > 0:
-                prior_cohort = all_cohorts_sorted[idx - 1]
+# --- TERM-OVER-TERM COMPARISON LOGIC ---
+all_cohorts_sorted = sorted(
+    [
+        str(c)
+        for c in df_all["cohort"].dropna().unique()
+        if str(c).strip()
+    ],
+    key=get_cohort_val
+)
 
-        if prior_cohort:
-            df_prior = df_all[df_all["cohort"].astype(str) == prior_cohort]
-            p_total = len(df_prior)
-            
-            p_eval = df_prior[
-                df_prior["graduate_on_time"].notna() & 
-                (df_prior["graduate_on_time"].astype(str).str.strip() != "") &
-                (~df_prior["graduate_on_time"].astype(str).str.lower().isin(["n/a", "none"]))
-            ]
-            p_grad_num = len(p_eval[p_eval["graduate_on_time"].astype(str).str.lower().isin(["yes", "y", "true", "1"])])
-            p_on_time_rate = (p_grad_num / p_total * 100) if p_total > 0 else 0.0
-            
-            p_comp = len(df_prior[
-                (df_prior["coursework_display"] == "Completed") & 
-                (df_prior["comprehensive_exam_display"] == "Passed") & 
-                (df_prior["capstone_display"] == "Defended")
-            ])
-            p_comp_rate = int((p_comp / p_total * 100)) if p_total > 0 else 0.0
-            
-            p_rem = p_total - p_comp
-            
-            grad_delta_str = f"{on_time_rate - p_on_time_rate:+.1f}% vs {prior_cohort}"
-            comp_delta_str = f"{completion_rate - p_comp_rate:+.0f}% vs {prior_cohort}"
-            rem_delta_str = f"{remaining_students - p_rem:+} vs {prior_cohort}"
-            
-            grad_color_mode = "normal"
-            comp_color_mode = "normal"
-            rem_color_mode = "inverse"
-        else:
-            grad_delta_str = f"{grad_numerator} out of {total_students} students"
-            comp_delta_str = f"{fully_completed} out of {total_students} students"
-            rem_delta_str = f"{remaining_students} out of {total_students} students"
-            
-            grad_color_mode = "normal" if on_time_rate >= 50 else "inverse"
-            comp_color_mode = "normal" if completion_rate >= 50 else "inverse"
-            
-            rem_percentage = (remaining_students / total_students * 100) if total_students > 0 else 0
-            rem_color_mode = "inverse" if rem_percentage > 50 else "normal"
+prior_cohort = None
 
-        top_c1, top_c2, top_c3, top_c4 = st.columns(4)
-        top_c1.metric(label="Total Students", value=total_students, help="Total students matching filters.")
-        top_c2.metric(label="Coursework", value=cw_completed, help="Completed required core coursework.")
-        top_c3.metric(label="Comprehensive Exam", value=exam_passed, help="Passed Comprehensive Examination.")
-        top_c4.metric(label="Capstones", value=capstone_defended, help="Defended and finalized Capstone project.")
-        st.write("")
+if selected_cohort != "All" and selected_cohort in all_cohorts_sorted:
+    idx = all_cohorts_sorted.index(selected_cohort)
+
+    if idx > 0:
+        prior_cohort = all_cohorts_sorted[idx - 1]
+
+if prior_cohort:
+    df_prior = df_all[
+        df_all["cohort"].astype(str) == prior_cohort
+    ]
+
+    p_total = len(df_prior)
+
+    p_eval = df_prior[
+        df_prior["graduate_on_time"].notna() &
+        (df_prior["graduate_on_time"].astype(str).str.strip() != "") &
+        (~df_prior["graduate_on_time"].astype(str).str.lower().isin(["n/a", "none"]))
+    ]
+
+    p_grad_num = len(
+        p_eval[
+            p_eval["graduate_on_time"]
+            .astype(str)
+            .str.lower()
+            .isin(["yes", "y", "true", "1"])
+        ]
+    )
+
+    p_on_time_rate = (
+        p_grad_num / p_total * 100
+        if p_total > 0
+        else 0.0
+    )
+
+    p_comp = len(
+        df_prior[
+            (df_prior["coursework_display"] == "Completed") &
+            (df_prior["comprehensive_exam_display"] == "Passed") &
+            (df_prior["capstone_display"] == "Defended")
+        ]
+    )
+
+    p_comp_rate = (
+        int((p_comp / p_total * 100))
+        if p_total > 0
+        else 0.0
+    )
+
+    p_rem = p_total - p_comp
+
+    grad_delta_str = (
+        f"{on_time_rate - p_on_time_rate:+.1f}% vs {prior_cohort}"
+    )
+
+    comp_delta_str = (
+        f"{completion_rate - p_comp_rate:+.0f}% vs {prior_cohort}"
+    )
+
+    rem_delta_str = (
+        f"{remaining_students - p_rem:+} vs {prior_cohort}"
+    )
+
+    grad_color_mode = "normal"
+    comp_color_mode = "normal"
+    rem_color_mode = "inverse"
+
+else:
+    grad_delta_str = (
+        f"{grad_numerator} out of {total_students} students"
+    )
+
+    comp_delta_str = (
+        f"{fully_completed} out of {total_students} students"
+    )
+
+    rem_delta_str = (
+        f"{remaining_students} out of {total_students} students"
+    )
+
+    grad_color_mode = (
+        "normal"
+        if on_time_rate >= 50
+        else "inverse"
+    )
+
+    comp_color_mode = (
+        "normal"
+        if completion_rate >= 50
+        else "inverse"
+    )
+
+    rem_percentage = (
+        remaining_students / total_students * 100
+        if total_students > 0
+        else 0
+    )
+
+    rem_color_mode = (
+        "inverse"
+        if rem_percentage > 50
+        else "normal"
+    )
+
+top_c1, top_c2, top_c3, top_c4 = st.columns(4)
+
+top_c1.metric(
+    label="Total Students",
+    value=total_students,
+    help="Total students matching filters."
+)
+
+top_c2.metric(
+    label="Coursework",
+    value=cw_completed,
+    help="Completed required core coursework."
+)
+
+top_c3.metric(
+    label="Comprehensive Exam",
+    value=exam_passed,
+    help="Passed Comprehensive Examination."
+)
+
+top_c4.metric(
+    label="Capstones",
+    value=capstone_defended,
+    help="Defended and finalized Capstone project."
+)
+
+st.write("")
 
         st.markdown(
             """
