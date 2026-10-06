@@ -1432,28 +1432,51 @@ def render_student_list(df_all):
         else:
             with st.container(border=False, height=500):
                 for row in display_df.to_dict("records"):
-                    is_at_risk = str(row.get("Risk Status", "")).strip() == "At Risk"
-
                     r_cols = st.columns(col_widths, vertical_alignment="center")
 
-                    cell_bg = "background-color: #FDE2E2; border-radius: 6px;" if is_at_risk else ""
+                    r_cols[0].markdown(
+                        f'<span class="roster-cell-id">{row.get("Student ID", "")}</span>',
+                        unsafe_allow_html=True
+                    )
+                    r_cols[1].markdown(
+                        f'<span class="roster-cell-text" style="font-weight: bold;">{row.get("Name", "")}</span>',
+                        unsafe_allow_html=True
+                    )
+                    r_cols[2].markdown(
+                        f'<span class="roster-cell-text">{row.get("Cohort", "")}</span>',
+                        unsafe_allow_html=True
+                    )
+                    r_cols[3].markdown(
+                        f'<span class="roster-cell-text">{row.get("Adviser", "")}</span>',
+                        unsafe_allow_html=True
+                    )
 
-                    r_cols[0].markdown(f'<div style="{cell_bg} padding: 8px;"><span class="roster-cell-id">{row.get("Student ID", "")}</span></div>', unsafe_allow_html=True)
-                    r_cols[1].markdown(f'<div style="{cell_bg} padding: 8px;"><span class="roster-cell-text" style="font-weight: bold;">{row.get("Name", "")}</span></div>', unsafe_allow_html=True)
-                    r_cols[2].markdown(f'<div style="{cell_bg} padding: 8px;"><span class="roster-cell-text">{row.get("Cohort", "")}</span></div>', unsafe_allow_html=True)
-                    r_cols[3].markdown(f'<div style="{cell_bg} padding: 8px;"><span class="roster-cell-text">{row.get("Adviser", "")}</span></div>', unsafe_allow_html=True)
-
-                    r_cols[4].markdown(f'<div style="{cell_bg} padding: 8px;">{get_stage_badge("coursework", row.get("Coursework", ""))}</div>', unsafe_allow_html=True)
-                    r_cols[5].markdown(f'<div style="{cell_bg} padding: 8px;">{get_stage_badge("comprehensive_exam", row.get("Comprehensive Exam", ""))}</div>', unsafe_allow_html=True)
-                    r_cols[6].markdown(f'<div style="{cell_bg} padding: 8px;">{get_stage_badge("capstone", row.get("Capstone", ""))}</div>', unsafe_allow_html=True)
+                    r_cols[4].markdown(
+                        get_stage_badge("coursework", row.get("Coursework", "")),
+                        unsafe_allow_html=True
+                    )
+                    r_cols[5].markdown(
+                        get_stage_badge("comprehensive_exam", row.get("Comprehensive Exam", "")),
+                        unsafe_allow_html=True
+                    )
+                    r_cols[6].markdown(
+                        get_stage_badge("capstone", row.get("Capstone", "")),
+                        unsafe_allow_html=True
+                    )
 
                     last_upd = row.get("Last Update", "")
                     display_date = last_upd if str(last_upd).strip() != "N/A" else "—"
-                    r_cols[7].markdown(f'<div style="{cell_bg} padding: 8px;"><span class="roster-cell-text">{display_date}</span></div>', unsafe_allow_html=True)
+
+                    r_cols[7].markdown(
+                        f'<span class="roster-cell-text">{display_date}</span>',
+                        unsafe_allow_html=True
+                    )
 
                     risk_status = str(row.get("Risk Status", ""))
+
                     r_cols[8].markdown(
-                        '<span class="sr-risk-pill">AT RISK</span>' if risk_status.strip() == "At Risk"
+                        '<span class="sr-risk-pill">AT RISK</span>'
+                        if risk_status.strip() == "At Risk"
                         else '<span class="sr-risk-none">ON TRACK</span>',
                         unsafe_allow_html=True
                     )
@@ -1467,7 +1490,10 @@ def render_student_list(df_all):
                             args=(row.get("Email", ""),)
                         )
 
-                    st.markdown('<div class="roster-row-divider"></div>', unsafe_allow_html=True)
+                    st.markdown(
+                        '<div class="roster-row-divider"></div>',
+                        unsafe_allow_html=True
+                    )
 
             st.caption(f"Showing {len(display_df)} students.")
 
