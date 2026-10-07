@@ -692,6 +692,11 @@ def render_add_data():
                 raw_df = clean_import_dataframe(read_import_file(uploaded_file))
                 detected_columns = detect_import_columns(raw_df.columns)
                 course_columns = detect_course_columns(raw_df.columns)
+                
+                st.write("DEBUG HEADERS:", list(raw_df.columns))
+                st.write("DEBUG DETECTED:", detected_columns)
+                st.write("DEBUG SAMPLE:", raw_df.head(3))
+
                 validated_df, warnings, errors = validate_import_dataframe(raw_df, detected_columns, course_columns)
     
                 st.session_state.import_loaded_file = uploaded_file.name
