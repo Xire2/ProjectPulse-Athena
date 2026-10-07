@@ -1291,6 +1291,10 @@ def render_student_list(df_all):
             min-width: 1050px !important;
             width: 1050px !important;
         }
+        .roster-th-divider {
+            width: 1050px !important;
+            min-width: 1050px !important;
+        }
     }
     
     div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) {
