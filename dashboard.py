@@ -2266,10 +2266,16 @@ def render_completion_trend_chart(df_all, active_program):
         term_id = int(term["term_id"])
         term_code = str(term["term_code"])
 
-        try:
-            term_df, _ = load_students(active_program, term_id)
-        except Exception:
+        lifecycle_count = conn.query("""
+            SELECT COUNT(*) AS record_count
+            FROM student_lifecycle_status
+            WHERE term_id = :term_id;
+        """, params={"term_id": term_id}, ttl=0)
+
+        if lifecycle_count.empty or int(lifecycle_count.iloc[0]["record_count"]) == 0:
             continue
+
+        term_df, _ = load_students(active_program, term_id)
 
         if term_df.empty:
             continue
@@ -2284,11 +2290,10 @@ def render_completion_trend_chart(df_all, active_program):
             ]
         )
 
-        completion_rate = (
-            fully_completed / total_students * 100
-            if total_students > 0
-            else 0
-        )
+        if total_students == 0:
+            continue
+
+        completion_rate = fully_completed / total_students * 100
 
         trend_rows.append({
             "term_code": term_code,
@@ -2334,7 +2339,7 @@ def render_completion_trend_chart(df_all, active_program):
 
     st.subheader(
         "Completion Trend — Last 4 Terms",
-        help="Shows the percentage of students who completed Coursework, Comprehensive Exam, and Capstone in each academic term."
+        help="Shows the percentage of students who fully completed Coursework, Comprehensive Exam, and Capstone in each academic term."
     )
     st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 # ------------------------------------------------------------------
