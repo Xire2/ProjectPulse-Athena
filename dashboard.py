@@ -32,7 +32,7 @@ st.markdown("""
 }
 
 div[data-testid="stHorizontalBlock"] {
-    min-width: max-content;
+    min-width: 0;
 }
 
 div[data-testid="stHorizontalBlock"] > div {
@@ -66,6 +66,7 @@ div[data-testid="stMetricValue"] div {
 [data-testid="stTable"] {
     width: 100%;
 }
+
 div[data-testid="stPlotlyChart"] {
     width: 100% !important;
     max-width: 100% !important;
@@ -75,11 +76,7 @@ div[data-testid="stVerticalBlockBorderWrapper"] {
     min-width: 0 !important;
     max-width: 100% !important;
 }
-@media (min-width: 769px) and (max-width: 1100px) {
-    [data-testid="stAppViewContainer"] .main .block-container {
-        min-width: 1100px;
-    }
-}
+
 @media (max-width: 1100px) {
     div[data-testid="stMetricValue"] div {
         font-size: 1.7rem !important;
@@ -1245,11 +1242,27 @@ def render_student_list(df_all):
         .roster-row-marker, .roster-header-marker {
             display: none !important;
         }
+        .roster-scroll-marker {
+        display: none !important;
+    }
     
-        div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) {
-            border-radius: 6px !important;
-            padding: 6px 4px !important;
+    @media (min-width: 769px) and (max-width: 1100px) {
+        div[data-testid="stVerticalBlock"]:has(.roster-scroll-marker) {
+            width: 100% !important;
+            max-width: 100% !important;
+            overflow-x: auto !important;
+            overflow-y: visible !important;
         }
+    
+        div[data-testid="stVerticalBlock"]:has(.roster-scroll-marker) div[data-testid="stHorizontalBlock"] {
+            min-width: 1050px !important;
+        }
+    }
+    
+    div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) {
+        border-radius: 6px !important;
+        padding: 6px 4px !important;
+    }
     
         div[data-testid="stHorizontalBlock"]:has(.roster-row-marker):has(.sr-risk-pill) {
             background-color: #D500001A !important;
@@ -1349,87 +1362,87 @@ def render_student_list(df_all):
         col_widths = [0.9, 1.5, 0.8, 1.5, 1.2, 1.2, 1.4, 0.9, 0.9, 0.8]
         header_labels = ["STUDENT ID", "NAME", "COHORT", "ADVISER", "COURSEWORK", "COMP EXAM", "CAPSTONE", "LAST UPDATE", "RISK", "ACTION"]
     
-        header_cols = st.columns(col_widths, vertical_alignment="center")
-        header_cols[0].markdown('<span class="roster-header-marker"></span>', unsafe_allow_html=True)
+        with st.container():
+            st.markdown('<span class="roster-scroll-marker"></span>', unsafe_allow_html=True)
     
-        for col, label in zip(header_cols, header_labels):
-            col.markdown(f'<div class="roster-th">{label}</div>', unsafe_allow_html=True)
+            header_cols = st.columns(col_widths, vertical_alignment="center")
+            header_cols[0].markdown('<span class="roster-header-marker"></span>', unsafe_allow_html=True)
     
-        st.markdown('<div class="roster-th-divider"></div>', unsafe_allow_html=True)
+            for col, label in zip(header_cols, header_labels):
+                col.markdown(f'<div class="roster-th">{label}</div>', unsafe_allow_html=True)
     
-        for _, row in display_df.iterrows():
-            is_at_risk = str(row.get("Risk Status", "")).strip() == "Flagged"
+            st.markdown('<div class="roster-th-divider"></div>', unsafe_allow_html=True)
     
-            r_cols = st.columns(col_widths, vertical_alignment="center")
+            for _, row in display_df.iterrows():
+                r_cols = st.columns(col_widths, vertical_alignment="center")
+                r_cols[0].markdown('<span class="roster-row-marker"></span>', unsafe_allow_html=True)
     
-            r_cols[0].markdown('<span class="roster-row-marker"></span>', unsafe_allow_html=True)
-    
-            r_cols[0].markdown(
-                f'<span class="roster-cell-id">{row.get("Student ID", "")}</span>',
-                unsafe_allow_html=True
-            )
-    
-            r_cols[1].markdown(
-                f'<span class="roster-cell-text">{row.get("Name", "")}</span>',
-                unsafe_allow_html=True
-            )
-    
-            r_cols[2].markdown(
-                f'<span class="roster-cell-text">{row.get("Cohort", "")}</span>',
-                unsafe_allow_html=True
-            )
-    
-            r_cols[3].markdown(
-                f'<span class="roster-cell-text">{row.get("Adviser", "")}</span>',
-                unsafe_allow_html=True
-            )
-    
-            r_cols[4].markdown(
-                get_stage_badge("coursework", row.get("Coursework", "")),
-                unsafe_allow_html=True
-            )
-    
-            r_cols[5].markdown(
-                get_stage_badge("comprehensive_exam", row.get("Comprehensive Exam", "")),
-                unsafe_allow_html=True
-            )
-    
-            r_cols[6].markdown(
-                get_stage_badge("capstone", row.get("Capstone", "")),
-                unsafe_allow_html=True
-            )
-    
-            last_upd = row.get("Last Update", "")
-            display_date = last_upd if str(last_upd).strip() != "N/A" else "—"
-    
-            r_cols[7].markdown(
-                f'<span class="roster-cell-text">{display_date}</span>',
-                unsafe_allow_html=True
-            )
-    
-            risk_status = str(row.get("Risk Status", "")).strip()
-    
-            if risk_status == "Flagged":
-                r_cols[8].markdown(
-                    '<span class="sr-risk-pill">AT RISK</span>',
-                    unsafe_allow_html=True
-                )
-            else:
-                r_cols[8].markdown(
-                    '<span class="sr-risk-none">ON TRACK</span>',
+                r_cols[0].markdown(
+                    f'<span class="roster-cell-id">{row.get("Student ID", "")}</span>',
                     unsafe_allow_html=True
                 )
     
-            with r_cols[9]:
-                st.button(
-                    "**View\nProfile**",
-                    key=f"view_{key_prefix}_{row.get('Student ID', '')}",
-                    use_container_width=True,
-                    on_click=go_to_profile,
-                    args=(row.get("Email", ""),)
+                r_cols[1].markdown(
+                    f'<span class="roster-cell-text">{row.get("Name", "")}</span>',
+                    unsafe_allow_html=True
                 )
     
-            st.markdown('<div class="roster-row-divider"></div>', unsafe_allow_html=True)
+                r_cols[2].markdown(
+                    f'<span class="roster-cell-text">{row.get("Cohort", "")}</span>',
+                    unsafe_allow_html=True
+                )
+    
+                r_cols[3].markdown(
+                    f'<span class="roster-cell-text">{row.get("Adviser", "")}</span>',
+                    unsafe_allow_html=True
+                )
+    
+                r_cols[4].markdown(
+                    get_stage_badge("coursework", row.get("Coursework", "")),
+                    unsafe_allow_html=True
+                )
+    
+                r_cols[5].markdown(
+                    get_stage_badge("comprehensive_exam", row.get("Comprehensive Exam", "")),
+                    unsafe_allow_html=True
+                )
+    
+                r_cols[6].markdown(
+                    get_stage_badge("capstone", row.get("Capstone", "")),
+                    unsafe_allow_html=True
+                )
+    
+                last_upd = row.get("Last Update", "")
+                display_date = last_upd if str(last_upd).strip() != "N/A" else "—"
+    
+                r_cols[7].markdown(
+                    f'<span class="roster-cell-text">{display_date}</span>',
+                    unsafe_allow_html=True
+                )
+    
+                risk_status = str(row.get("Risk Status", "")).strip()
+    
+                if risk_status == "Flagged":
+                    r_cols[8].markdown(
+                        '<span class="sr-risk-pill">AT RISK</span>',
+                        unsafe_allow_html=True
+                    )
+                else:
+                    r_cols[8].markdown(
+                        '<span class="sr-risk-none">ON TRACK</span>',
+                        unsafe_allow_html=True
+                    )
+    
+                with r_cols[9]:
+                    st.button(
+                        "**View\nProfile**",
+                        key=f"view_{key_prefix}_{row.get('Student ID', '')}",
+                        use_container_width=True,
+                        on_click=go_to_profile,
+                        args=(row.get("Email", ""),)
+                    )
+    
+                st.markdown('<div class="roster-row-divider"></div>', unsafe_allow_html=True)
     
         st.caption(f"Showing {len(display_df)} students.")
 
