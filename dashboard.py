@@ -132,7 +132,7 @@ def log_security_event(user_id: int, event_type: str, details: str):
 
 def authenticate_user(username: str, password_attempt: str):
     query = text("""
-        SELECT user_id, username, full_name, role, can_edit, is_active
+        SELECT user_id, username, full_name, role, can_edit, can_import, is_active
         FROM app_users
         WHERE username = :u AND password_hash = crypt(:p, password_hash) AND is_active = TRUE;
     """)
@@ -142,7 +142,6 @@ def authenticate_user(username: str, password_attempt: str):
     except Exception as e:
         st.error(f"Authentication query error: {e}")
         return None
-
 # ------------------------------------------------------------------
 # GLOBAL DASHBOARD CONFIGURATION (DYNAMIC CONTEXT)
 # ------------------------------------------------------------------
