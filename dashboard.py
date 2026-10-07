@@ -1492,14 +1492,14 @@ def render_student_list(df_all):
 
     # --- RENDER EXECUTIVE DASHBOARD ---
     if st.session_state.admin_view == "Executive Dashboard":
-            title_col, export_col = st.columns([5, 1], vertical_alignment="bottom")
-    
-            with title_col:
-                st.markdown(f"#### Executive Summary — {summary_label}")
-    
-            with export_col:
-                pdf_button_placeholder = st.empty()
-        
+        title_col, export_col = st.columns([5, 1], vertical_alignment="bottom")
+
+        with title_col:
+            st.markdown(f"#### Executive Summary — {summary_label}")
+
+        with export_col:
+            pdf_button_placeholder = st.empty()
+
         # --- Dashboard Filters (No Search or Sort) ---
         cohort_col, adv_col = st.columns(2)
         with cohort_col:
