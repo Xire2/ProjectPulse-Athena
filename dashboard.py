@@ -852,7 +852,19 @@ def render_student_list(df_all):
         .status-pill { background-color: #f0f2f6; padding: 4px 8px; border-radius: 12px; font-size: 0.8rem; color: #31333F !important; font-weight: 600; }
         .sr-risk-pill { background-color: #D500001A; color: #D50000; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
         .sr-risk-none { background-color: #0080001A; color: #008000; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
+        .sr-at-risk-row {
+            background-color: #D500001A !important;
+            border-left: 4px solid #D50000 !important;
+            border-radius: 6px !important;
+            padding: 6px 4px !important;
+        }
         
+        div[data-testid="stHorizontalBlock"]:has(.sr-at-risk-marker) {
+            background-color: #D500001A !important;
+            border-left: 4px solid #D50000 !important;
+            border-radius: 6px !important;
+            padding: 6px 4px !important;
+        }
         /* Force standard buttons to allow multi-line text */
         div[data-testid="stButton"] button p {
             white-space: normal !important;
@@ -883,6 +895,10 @@ def render_student_list(df_all):
             with st.container(border=False, height=500):
                 for row in display_df.to_dict("records"):
                     r_cols = st.columns(col_widths, vertical_alignment="center")
+                    is_at_risk = str(row.get("Risk Status", "")).strip() == "Flagged"
+                
+                    if is_at_risk:
+                        r_cols[0].markdown('<span class="sr-at-risk-marker"></span>', unsafe_allow_html=True)
                     is_at_risk = str(row.get("Risk Status", "")).strip() == "Flagged"
                     risk_class = "sr-at-risk-cell" if is_at_risk else ""
                     r_cols[0].markdown(f'<div class="{risk_class}"><span class="roster-cell-id">{row.get("Student ID", "")}</span></div>', unsafe_allow_html=True)
