@@ -12,9 +12,10 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import re
 import os
-from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, JsCode
+
 # Generic title
 st.set_page_config(page_title="Project Pulse — Program Dashboard", page_icon="🎓", layout="wide")
+
 # ------------------------------------------------------------------
 # ETHICAL VISUALIZATION SPECIFICATION & THRESHOLDS
 # ------------------------------------------------------------------
@@ -107,6 +108,7 @@ def overall_status(row) -> str:
     elif coursework == "COMPLETED": return "Graduated"
     elif coursework == "CANCELLED": return "Cancelled"
     return "Unknown"
+
 # ------------------------------------------------------------------
 # DATABASE & AUDIT LOGGING
 # ------------------------------------------------------------------
@@ -132,7 +134,7 @@ def log_security_event(user_id: int, event_type: str, details: str):
 
 def authenticate_user(username: str, password_attempt: str):
     query = text("""
-        SELECT user_id, username, full_name, role, can_edit, can_import, is_active
+        SELECT user_id, username, full_name, role, can_edit, is_active
         FROM app_users
         WHERE username = :u AND password_hash = crypt(:p, password_hash) AND is_active = TRUE;
     """)
@@ -142,6 +144,7 @@ def authenticate_user(username: str, password_attempt: str):
     except Exception as e:
         st.error(f"Authentication query error: {e}")
         return None
+
 # ------------------------------------------------------------------
 # GLOBAL DASHBOARD CONFIGURATION (DYNAMIC CONTEXT)
 # ------------------------------------------------------------------
@@ -161,961 +164,7 @@ def load_dashboard_config():
     return "UNCONFIGURED PROGRAM", "UNCONFIGURED TERM"
 
 ACTIVE_PROGRAM, CURRENT_TERM_LABEL = load_dashboard_config()
-# ------------------------------------------------------------------
-# TERM MANAGEMENT
-# ------------------------------------------------------------------
-def load_available_terms():
-    """
-    Load academic terms that are currently available to dashboard users.
 
-    Future terms are excluded until their start date.
-    The current term is determined from the term table dates.
-    """
-
-    today = datetime.now(ZoneInfo("Asia/Manila")).date()
-
-    terms_df = conn.query(
-        """
-        SELECT
-            term_id,
-            term_code,
-            start_date,
-            end_date
-        FROM term
-        WHERE start_date IS NOT NULL
-          AND start_date <= :today
-        ORDER BY start_date DESC;
-        """,
-        params={"today": today},
-        ttl=0
-    )
-
-    return terms_df
-
-
-def format_term_label(term_code):
-    """
-    Converts:
-        1Q2627 → 1Q, A.Y. 2026–2027
-        1T2526 → 1T, A.Y. 2025–2026
-    """
-
-    term_code = str(term_code).strip().upper()
-
-    match = re.match(r"^(\d[TQ])(\d{2})(\d{2})$", term_code)
-
-    if not match:
-        return term_code
-
-    term_period = match.group(1)
-    start_year = int(match.group(2))
-    end_year = int(match.group(3))
-
-    # Convert 26 → 2026 and 27 → 2027
-    start_full_year = 2000 + start_year
-    end_full_year = 2000 + end_year
-
-    return f"{term_period}, A.Y. {start_full_year}–{end_full_year}"
-
-def get_current_term():
-    """
-    Determines the current academic term from the term table.
-
-    Current term:
-        start_date <= today
-        AND
-        end_date is NULL OR end_date >= today
-
-    If more than one term qualifies, the term with the
-    latest start date is treated as current.
-    """
-
-    today = datetime.now(ZoneInfo("Asia/Manila")).date()
-
-    current_term_df = conn.query(
-        """
-        SELECT
-            term_id,
-            term_code,
-            start_date,
-            end_date
-        FROM term
-        WHERE start_date IS NOT NULL
-          AND start_date <= :today
-          AND (
-              end_date IS NULL
-              OR end_date >= :today
-          )
-        ORDER BY start_date DESC
-        LIMIT 1;
-        """,
-        params={"today": today},
-        ttl=0
-    )
-
-    if current_term_df.empty:
-        return None
-
-    return current_term_df.iloc[0]
-# ------------------------------------------------------------------
-# ADD DATA / IMPORT HELPERS
-# ------------------------------------------------------------------
-
-IMPORT_REQUIRED_FIELDS = ["student_number"]
-
-IMPORT_FIELD_ALIASES = {
-    "student_number": ["student number", "student_number", "student id", "student_id", "id number", "student no"],
-    "student_email": ["student email", "email", "email address", "student_email"],
-    "first_name": ["first", "first name", "firstname", "first_name"],
-    "last_name": ["last", "last name", "lastname", "last_name"],
-    "cohort": ["cohort", "cohort code", "cohort_code"],
-    "adviser": ["adviser", "advisor", "primary adviser", "primary advisor"],
-    "coursework_status": ["coursework status", "coursework_status"],
-    "comprehensive_exam": ["comprehensive exam", "comprehensive exam status", "comprehensive_exam", "comprehensive_exam_status"],
-    "capstone": ["capstone", "capstone/thesis", "capstone status", "capstone_status", "capstone/thesis status"],
-    "graduate_on_time": ["graduate on time", "graduated on time", "graduate_on_time"],
-    "graduate_date_term_sy": ["graduate date (term/sy)", "graduate date", "graduation date", "graduation term", "graduate_date_term_sy"],
-    "remarks": ["remarks", "remark", "notes", "comments"]
-}
-
-def normalize_import_value(value):
-    if value is None or pd.isna(value):
-        return None
-    value = str(value).strip()
-    return value if value else None
-
-def normalize_import_header(value):
-    if value is None or pd.isna(value):
-        return ""
-    value = str(value).strip().lower()
-    value = re.sub(r"[\n\r]+", " ", value)
-    value = re.sub(r"[_\-]+", " ", value)
-    value = re.sub(r"\s+", " ", value)
-    return value.strip()
-
-def detect_import_columns(columns):
-    detected = {}
-    normalized_columns = {column: normalize_import_header(column) for column in columns}
-
-    for db_field, aliases in IMPORT_FIELD_ALIASES.items():
-        normalized_aliases = {normalize_import_header(alias) for alias in aliases}
-        for original, normalized in normalized_columns.items():
-            if normalized in normalized_aliases:
-                detected[db_field] = original
-                break
-
-    return detected
-
-def detect_course_columns(columns):
-    non_course_columns = {normalize_import_header(value) for aliases in IMPORT_FIELD_ALIASES.values() for value in aliases}
-    course_columns = []
-
-    for column in columns:
-        normalized = normalize_import_header(column)
-        if normalized in non_course_columns:
-            continue
-
-        compact = re.sub(r"[^A-Z0-9]", "", str(column).upper())
-
-        if re.fullmatch(r"[A-Z]{2,5}\d{3}", compact):
-            course_columns.append(column)
-
-    return course_columns
-
-def read_import_file(uploaded_file):
-    try:
-        file_name = uploaded_file.name.lower()
-
-        if file_name.endswith(".csv"):
-            raw = pd.read_csv(uploaded_file, header=None, dtype=object)
-        elif file_name.endswith(".xlsx") or file_name.endswith(".xls"):
-            raw = pd.read_excel(uploaded_file, header=None, dtype=object)
-        else:
-            raise ValueError("Only CSV and Excel files are supported.")
-
-        return raw
-
-    except Exception as e:
-        raise ValueError(f"Could not read the uploaded file: {e}")
-
-def clean_import_dataframe(df):
-    df = df.copy().dropna(how="all").reset_index(drop=True)
-
-    for column in df.columns:
-        df[column] = df[column].apply(
-            lambda value: None if pd.isna(value) or str(value).strip().lower() in ("nan", "none") else value
-        )
-
-    normalized_rows = [
-        [normalize_import_header(value) for value in df.iloc[index]]
-        for index in range(min(5, len(df)))
-    ]
-
-    header_row = None
-
-    for index, row in enumerate(normalized_rows):
-        required_headers = {
-            "student number",
-            "student email",
-            "first",
-            "last",
-            "cohort"
-        }
-
-        if len(required_headers.intersection(row)) >= 3:
-            header_row = index
-            break
-
-    if header_row is None:
-        header_row = 0
-
-    headers = []
-
-    for column_index in range(len(df.columns)):
-        values = [
-            df.iloc[row_index, column_index]
-            for row_index in range(header_row + 1)
-        ]
-
-        values = [
-            str(value).strip()
-            for value in values
-            if value is not None
-            and str(value).strip()
-            and str(value).strip().lower() not in ("nan", "none")
-        ]
-
-        header = values[-1] if values else f"Unnamed Column {column_index + 1}"
-
-        course_code = next(
-            (
-                value
-                for value in reversed(values)
-                if re.fullmatch(r"[A-Z]{2,5}\d{3}", value.upper())
-            ),
-            None
-        )
-
-        if course_code:
-            headers.append(course_code)
-        else:
-            headers.append(header)
-
-    df = df.iloc[header_row + 1:].reset_index(drop=True)
-    df.columns = headers
-
-    return df
-
-def get_issue_cell_style():
-    return JsCode("""
-    function(params) {
-        if (params.data && params.data.__issue_cells) {
-            var issues = params.data.__issue_cells;
-            if (issues.indexOf(params.colDef.field) !== -1) {
-                return {
-                    backgroundColor: '#FFF3CD',
-                    color: '#856404',
-                    fontWeight: '600',
-                    border: '2px solid #FFAE00'
-                };
-            }
-        }
-        return {};
-    }
-    """)
-
-def get_import_grid_options(focus_row=None, focus_column=None):
-    focus_row = int(focus_row) if focus_row is not None else -1
-    focus_column = json.dumps(str(focus_column)) if focus_column else "null"
-
-    on_grid_ready = JsCode(f"""
-    function(params) {{
-        window.setTimeout(function() {{
-            var rowIndex = {focus_row};
-            var columnName = {focus_column};
-
-            if (rowIndex >= 0) {{
-                params.api.ensureIndexVisible(rowIndex, 'middle');
-
-                if (columnName) {{
-                    params.api.setFocusedCell(rowIndex, columnName);
-                }}
-            }}
-        }}, 250);
-    }}
-    """)
-
-    gb = GridOptionsBuilder.from_dataframe(st.session_state.import_preview_df)
-
-    gb.configure_default_column(editable=True, resizable=True, sortable=True, filter=True, wrapText=False, autoHeight=False)
-    gb.configure_grid_options(onGridReady=on_grid_ready, stopEditingWhenCellsLoseFocus=True, rowSelection="single")
-
-    for column in st.session_state.import_preview_df.columns:
-        if column != "__issue_cells":
-            gb.configure_column(column, editable=True, cellStyle=get_issue_cell_style())
-
-    gb.configure_column("__issue_cells", hide=True)
-
-    return gb.build()
-
-
-def validate_import_dataframe(df, detected_columns, course_columns):
-    warnings = []
-    errors = []
-    working_df = df.copy()
-    working_df["__issue_cells"] = [[] for _ in range(len(working_df))]
-
-    def add_issue(row_index, column, severity, message):
-        issue = {
-            "row": int(row_index) + 2,
-            "student_number": str(working_df.iloc[row_index].get(detected_columns.get("student_number", ""), "")),
-            "column": str(column),
-            "current_value": working_df.iloc[row_index].get(column, ""),
-            "severity": severity,
-            "message": message,
-            "row_index": int(row_index)
-        }
-
-        if severity == "Error":
-            errors.append(issue)
-        else:
-            warnings.append(issue)
-
-        if column in working_df.columns:
-            working_df.at[row_index, "__issue_cells"].append(column)
-
-    student_column = detected_columns.get("student_number")
-
-    if not student_column:
-        errors.append({
-            "row": "—",
-            "student_number": "—",
-            "column": "Student Number",
-            "current_value": "Missing column",
-            "severity": "Error",
-            "message": "A student number column could not be detected.",
-            "row_index": None
-        })
-    else:
-        for index, value in working_df[student_column].items():
-            if value is None or str(value).strip() == "":
-                add_issue(index, student_column, "Error", "Student number is required.")
-
-    warning_fields = {
-        "adviser": "Missing adviser.",
-        "graduate_date_term_sy": "Missing graduation date/term.",
-        "capstone": "Missing capstone status.",
-        "student_email": "Missing student email.",
-        "cohort": "Missing cohort.",
-        "remarks": "Missing remarks."
-    }
-
-    for field, message in warning_fields.items():
-        column = detected_columns.get(field)
-
-        if not column:
-            continue
-
-        for index, value in working_df[column].items():
-            if value is None or str(value).strip() == "":
-                add_issue(index, column, "Warning", message)
-
-    return working_df, warnings, errors
-
-def refresh_import_validation():
-    detected_columns = st.session_state.get("import_detected_columns", {})
-    course_columns = st.session_state.get("import_course_columns", [])
-    preview_df = st.session_state.get("import_preview_df")
-
-    if preview_df is None:
-        return
-
-    clean_df = preview_df.drop(columns=["__issue_cells"], errors="ignore").copy()
-    validated_df, warnings, errors = validate_import_dataframe(clean_df, detected_columns, course_columns)
-
-    st.session_state.import_preview_df = validated_df
-    st.session_state.import_warnings = warnings
-    st.session_state.import_errors = errors
-
-def render_import_issue_list():
-    warnings = st.session_state.get("import_warnings", [])
-    errors = st.session_state.get("import_errors", [])
-    issues = errors + warnings
-
-    if not issues:
-        st.success("✓ No validation issues detected.")
-        return
-
-    st.markdown("### Issues Requiring Attention")
-
-    issue_df = pd.DataFrame([
-        {
-            "Severity": issue["severity"],
-            "Row": issue["row"],
-            "Student Number": issue["student_number"],
-            "Column": issue["column"],
-            "Current Value": "Blank" if issue["current_value"] is None or str(issue["current_value"]).strip() == "" else str(issue["current_value"]),
-            "Issue": issue["message"]
-        }
-        for issue in issues
-    ])
-
-    if not issue_df.empty:
-        st.dataframe(issue_df, hide_index=True, use_container_width=True)
-
-    for index, issue in enumerate(issues):
-        severity_icon = "🔴" if issue["severity"] == "Error" else "⚠️"
-        issue_col1, issue_col2 = st.columns([6, 1])
-
-        with issue_col1:
-            st.markdown(f"{severity_icon} **Row {issue['row']} · {issue['column']}** — {issue['message']}")
-
-        with issue_col2:
-            if issue["row_index"] is not None:
-                if st.button("✏️ Edit", key=f"import_issue_edit_{index}_{issue['row_index']}_{issue['column']}", use_container_width=True):
-                    st.session_state.import_focus_row = issue["row_index"]
-                    st.session_state.import_focus_column = issue["column"]
-                    st.rerun()
-
-def render_add_data():
-    st.subheader("➕ Add Data")
-    st.caption("Import or manually enter student academic records. Imported records are assigned to the selected academic term.")
-
-    if not user.get("can_import", False):
-        log_security_event(user["user_id"], "UNAUTHORIZED_IMPORT_ACCESS", "User attempted to access Add Data without import permission.")
-        st.error("⛔ You do not have permission to add or import data.")
-        return
-
-    available_terms_df = load_available_terms()
-    current_term = get_current_term()
-
-    if available_terms_df.empty:
-        st.error("No academic terms are currently available.")
-        return
-
-    term_options = available_terms_df["term_id"].tolist()
-
-    if "import_term_id" not in st.session_state:
-        st.session_state.import_term_id = int(current_term["term_id"]) if current_term is not None else int(term_options[0])
-
-    if st.session_state.import_term_id not in term_options:
-        st.session_state.import_term_id = int(current_term["term_id"]) if current_term is not None else int(term_options[0])
-
-    selected_import_term_id = st.selectbox(
-        "Academic Term",
-        options=term_options,
-        index=term_options.index(st.session_state.import_term_id),
-        format_func=lambda term_id: format_term_label(available_terms_df.loc[available_terms_df["term_id"] == term_id, "term_code"].iloc[0]),
-        key="import_term_selector"
-    )
-
-    st.session_state.import_term_id = selected_import_term_id
-
-    st.info("The selected academic term will automatically be assigned to all term-specific records created by this import.")
-
-    import_method = st.radio("Add Data Method", ["Import File", "Manual Data Entry"], horizontal=True, key="import_method")
-
-    if import_method == "Import File":
-        uploaded_file = st.file_uploader("Upload CSV or Excel file", type=["csv", "xlsx", "xls"], key="student_import_file")
-    
-        if uploaded_file is None:
-            for key in ["import_loaded_file", "import_preview_df", "import_detected_columns", "import_course_columns", "import_warnings", "import_errors", "import_focus_row", "import_focus_column"]:
-                st.session_state.pop(key, None)
-        elif st.session_state.get("import_loaded_file") != uploaded_file.name:
-            try:
-                raw_df = clean_import_dataframe(read_import_file(uploaded_file))
-                detected_columns = detect_import_columns(raw_df.columns)
-                course_columns = detect_course_columns(raw_df.columns)
-                validated_df, warnings, errors = validate_import_dataframe(raw_df, detected_columns, course_columns)
-    
-                st.session_state.import_loaded_file = uploaded_file.name
-                st.session_state.import_preview_df = validated_df
-                st.session_state.import_detected_columns = detected_columns
-                st.session_state.import_course_columns = course_columns
-                st.session_state.import_warnings = warnings
-                st.session_state.import_errors = errors
-                st.session_state.import_focus_row = None
-                st.session_state.import_focus_column = None
-    
-            except Exception as e:
-                st.error(str(e))
-                return
-
-    else:
-        if "import_manual_df" not in st.session_state:
-            st.session_state.import_manual_df = pd.DataFrame(columns=["student_number", "student_email", "first_name", "last_name", "cohort", "adviser", "coursework_status", "comprehensive_exam", "capstone", "graduate_on_time", "graduate_date_term_sy", "remarks"])
-
-        st.session_state.import_preview_df = st.data_editor(
-            st.session_state.import_manual_df,
-            num_rows="dynamic",
-            use_container_width=True,
-            height=400,
-            key="manual_import_editor"
-        )
-
-        if st.button("Validate Manual Data", type="secondary"):
-            st.session_state.import_detected_columns = {column: column for column in st.session_state.import_preview_df.columns if column in IMPORT_FIELD_ALIASES}
-            st.session_state.import_course_columns = []
-            refresh_import_validation()
-            st.rerun()
-
-    preview_df = st.session_state.get("import_preview_df")
-
-    if preview_df is None:
-        return
-
-    st.divider()
-
-    detected_columns = st.session_state.get("import_detected_columns", {})
-    course_columns = st.session_state.get("import_course_columns", [])
-
-    st.markdown("### Import Summary")
-
-    summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
-
-    summary_col1.metric("Students Detected", len(preview_df))
-    summary_col2.metric("Course Columns", len(course_columns))
-    summary_col3.metric("Warnings", len(st.session_state.get("import_warnings", [])))
-    summary_col4.metric("Errors", len(st.session_state.get("import_errors", [])))
-
-    st.markdown("### Data Preview & Editor")
-
-    display_df = preview_df.drop(columns=["__issue_cells"], errors="ignore")
-    
-    edited_df = st.data_editor(
-        display_df,
-        use_container_width=True,
-        height=450,
-        num_rows="fixed",
-        key="import_main_datasheet"
-    )
-    
-    edited_df["__issue_cells"] = preview_df.get("__issue_cells", pd.Series([[] for _ in range(len(edited_df))])).values
-    st.session_state.import_preview_df = edited_df   
-
-    st.caption("You may edit any cell. Highlighted cells correspond to detected warnings or errors.")
-
-    st.divider()
-
-    render_import_issue_list()
-
-    st.divider()
-
-    current_errors = st.session_state.get("import_errors", [])
-
-    if current_errors:
-        st.error(f"🔴 {len(current_errors)} error(s) must be fixed before the import can be finalized.")
-    else:
-        st.success("✓ No blocking errors. Warnings may remain if the missing information is intentional.")
-
-    finalize_col1, finalize_col2 = st.columns(2)
-
-    with finalize_col1:
-        if st.button("Revalidate Data", use_container_width=True):
-            refresh_import_validation()
-            st.rerun()
-
-    with finalize_col2:
-        finalize_disabled = bool(current_errors)
-
-        if st.button("Finalize Import", type="primary", use_container_width=True, disabled=finalize_disabled):
-            finalize_import_to_database()
-def finalize_import_to_database():
-    preview_df = st.session_state.get("import_preview_df")
-    if preview_df is None or preview_df.empty:
-        st.error("There is no data to import.")
-        return
-
-    term_id = st.session_state.get("import_term_id")
-    if term_id is None:
-        st.error("Please select an academic term before importing.")
-        return
-
-    errors = st.session_state.get("import_errors", [])
-    if errors:
-        st.error(f"Import blocked. Please fix {len(errors)} error(s) first.")
-        return
-
-    detected_columns = st.session_state.get("import_detected_columns", {})
-    course_columns = st.session_state.get("import_course_columns", [])
-
-    term_lookup_df = load_available_terms()
-    if term_lookup_df.empty:
-        st.error("Unable to find the selected academic term.")
-        return
-
-    matching_term = term_lookup_df[term_lookup_df["term_id"] == term_id]
-    if matching_term.empty:
-        st.error("The selected academic term is no longer available.")
-        return
-
-    selected_term_code = matching_term.iloc[0]["term_code"]
-    import_date = datetime.now(ZoneInfo("Asia/Manila")).date()
-
-    try:
-        with conn.session as s:
-            debug_course = s.execute(text("SELECT course_code FROM courses WHERE UPPER(TRIM(course_code)) = 'MBAC602' LIMIT 1;")).fetchone()
-            st.write("DEBUG MBAC602:", debug_course)
-            imported_students = 0
-            imported_courses = 0
-            imported_lifecycle = 0
-            updated_students = 0
-
-            def clean_value(value):
-                if pd.isna(value):
-                    return None
-                value = str(value).strip()
-                return None if value == "" or value.lower() in {"nan", "none", "n/a", "na"} else value
-
-            program_result = s.execute(
-                text("SELECT program_id FROM program WHERE program_code = :program_code LIMIT 1;"),
-                {"program_code": ACTIVE_PROGRAM}
-            ).fetchone()
-
-            if not program_result:
-                raise ValueError(f"Program '{ACTIVE_PROGRAM}' was not found in the program table.")
-
-            program_id = program_result[0]
-
-            for _, row in preview_df.iterrows():
-                student_number = row.get(detected_columns.get("student_number", "student_number"))
-
-                if pd.isna(student_number) or str(student_number).strip() == "":
-                    continue
-
-                try:
-                    student_number = int(float(student_number))
-                except Exception:
-                    continue
-
-                student_email = clean_value(row.get(detected_columns.get("student_email", "student_email")))
-                first_name = clean_value(row.get(detected_columns.get("first_name", "first_name")))
-                last_name = clean_value(row.get(detected_columns.get("last_name", "last_name")))
-                cohort_code = clean_value(row.get(detected_columns.get("cohort", "cohort")))
-                adviser_name = clean_value(row.get(detected_columns.get("adviser", "adviser")))
-                graduate_on_time = clean_value(row.get(detected_columns.get("graduate_on_time", "graduate_on_time")))
-                graduate_date_term_sy = clean_value(row.get(detected_columns.get("graduate_date_term_sy", "graduate_date_term_sy")))
-                remarks = clean_value(row.get(detected_columns.get("remarks", "remarks")))
-
-                graduate_on_time_value = None if graduate_on_time is None else graduate_on_time.lower() in {"yes", "y", "true", "1", "on"}
-
-                cohort_id = None
-                if cohort_code:
-                    cohort_result = s.execute(
-                        text("SELECT cohort_id FROM cohort WHERE cohort_code = :cohort_code LIMIT 1;"),
-                        {"cohort_code": cohort_code}
-                    ).fetchone()
-                    if cohort_result:
-                        cohort_id = cohort_result[0]
-
-                adviser_id = None
-                if adviser_name:
-                    adviser_result = s.execute(
-                        text("""
-                            SELECT adviser_id
-                            FROM advisers
-                            WHERE LOWER(TRIM(full_name)) = LOWER(TRIM(:adviser_name))
-                            LIMIT 1;
-                        """),
-                        {"adviser_name": adviser_name}
-                    ).fetchone()
-                    if adviser_result:
-                        adviser_id = adviser_result[0]
-
-                existing_student = s.execute(
-                    text("SELECT student_number FROM students_normalized WHERE student_number = :student_number LIMIT 1;"),
-                    {"student_number": student_number}
-                ).fetchone()
-
-                student_params = {
-                    "student_number": student_number,
-                    "student_email": student_email,
-                    "first_name": first_name,
-                    "last_name": last_name,
-                    "cohort_id": cohort_id,
-                    "adviser_id": adviser_id,
-                    "program_id": program_id,
-                    "graduate_on_time": graduate_on_time_value,
-                    "graduate_date_term_sy": graduate_date_term_sy,
-                    "remarks": remarks
-                }
-
-                if existing_student:
-                    s.execute(
-                        text("""
-                            UPDATE students_normalized
-                            SET student_email = :student_email,
-                                first_name = :first_name,
-                                last_name = :last_name,
-                                cohort_id = :cohort_id,
-                                adviser_id = :adviser_id,
-                                program_id = :program_id,
-                                graduate_on_time = :graduate_on_time,
-                                graduate_date_term_sy = :graduate_date_term_sy,
-                                remarks = :remarks
-                            WHERE student_number = :student_number;
-                        """),
-                        student_params
-                    )
-                    updated_students += 1
-                else:
-                    s.execute(
-                        text("""
-                            INSERT INTO students_normalized (
-                                student_number, student_email, first_name, last_name,
-                                cohort_id, adviser_id, program_id, graduate_on_time,
-                                graduate_date_term_sy, remarks
-                            )
-                            VALUES (
-                                :student_number, :student_email, :first_name, :last_name,
-                                :cohort_id, :adviser_id, :program_id, :graduate_on_time,
-                                :graduate_date_term_sy, :remarks
-                            );
-                        """),
-                        student_params
-                    )
-                    imported_students += 1
-
-                for course_column in course_columns:
-                    course_code = str(course_column).strip().upper()
-                    cleaned_course_status = clean_value(row.get(course_column))
-
-                    if cleaned_course_status is None:
-                        continue
-
-                    course_exists = s.execute(
-                        text("""
-                            SELECT course_code
-                            FROM courses
-                            WHERE UPPER(course_code) = :course_code
-                            LIMIT 1;
-                        """),
-                        {"course_code": course_code}
-                    ).fetchone()
-                    
-                    if not course_exists:
-                        continue
-                    
-                    course_code = course_exists[0]
-                    
-                    enrollment_params = {
-                        "student_number": student_number,
-                        "course_code": course_code,
-                        "term_id": term_id,
-                        "status": cleaned_course_status
-                    }
-
-                    existing_enrollment = s.execute(
-                        text("""
-                            SELECT 1
-                            FROM student_course_enrollments
-                            WHERE student_number = :student_number
-                              AND UPPER(course_code) = :course_code
-                              AND term_id = :term_id
-                            LIMIT 1;
-                        """),
-                        enrollment_params
-                    ).fetchone()
-
-                    if existing_enrollment:
-                        s.execute(
-                            text("""
-                                UPDATE student_course_enrollments
-                                SET status = :status
-                                WHERE student_number = :student_number
-                                  AND UPPER(course_code) = :course_code
-                                  AND term_id = :term_id;
-                            """),
-                            enrollment_params
-                        )
-                    else:
-                        s.execute(
-                            text("""
-                                INSERT INTO student_course_enrollments (
-                                    student_number, course_code, term_id, status
-                                )
-                                VALUES (
-                                    :student_number, :course_code, :term_id, :status
-                                );
-                            """),
-                            enrollment_params
-                        )
-                        imported_courses += 1
-
-                lifecycle_columns = {
-                    "coursework": detected_columns.get("coursework_status"),
-                    "comprehensive_exam": detected_columns.get("comprehensive_exam"),
-                    "capstone": detected_columns.get("capstone")
-                }
-
-                lifecycle_values = {
-                    stage: clean_value(row.get(column))
-                    for stage, column in lifecycle_columns.items()
-                    if column
-                }
-
-                active_stage = next(
-                    (stage for stage in ["capstone", "comprehensive_exam", "coursework"]
-                     if lifecycle_values.get(stage, "").lower() in {"in progress", "pending"}),
-                    "capstone"
-                )
-
-                for stage_name, stage_source_column in lifecycle_columns.items():
-                    if not stage_source_column:
-                        continue
-
-                    cleaned_stage_status = lifecycle_values.get(stage_name)
-
-                    if cleaned_stage_status is None:
-                        continue
-
-                    status_lookup = {
-                        "done": "completed",
-                        "completed": "completed",
-                        "in progress": "in-progress",
-                        "incomplete": "incomplete",
-                        "pending": "pending",
-                        "cancelled": "cancelled"
-                    }
-
-                    status_name = status_lookup.get(
-                        cleaned_stage_status.lower(),
-                        cleaned_stage_status
-                    )
-
-                    stage_result = s.execute(
-                        text("""
-                            SELECT stage_id
-                            FROM lifecycle_stage
-                            WHERE LOWER(stage_name) = LOWER(:stage_name)
-                            LIMIT 1;
-                        """),
-                        {"stage_name": stage_name}
-                    ).fetchone()
-
-                    if not stage_result:
-                        continue
-
-                    stage_id = stage_result[0]
-
-                    status_result = s.execute(
-                        text("""
-                            SELECT status_id
-                            FROM lifecycle_status
-                            WHERE LOWER(REPLACE(status_name, ' ', '-')) =
-                                  LOWER(REPLACE(:status_name, ' ', '-'))
-                            LIMIT 1;
-                        """),
-                        {"status_name": status_name}
-                    ).fetchone()
-
-                    if not status_result:
-                        continue
-
-                    status_id = status_result[0]
-
-                    existing_lifecycle = s.execute(
-                        text("""
-                            SELECT student_lifecycle_status_id, status_id, stage_started_date
-                            FROM student_lifecycle_status
-                            WHERE student_number = :student_number
-                              AND stage_id = :stage_id
-                              AND term_id = :term_id
-                            LIMIT 1;
-                        """),
-                        {
-                            "student_number": student_number,
-                            "stage_id": stage_id,
-                            "term_id": term_id
-                        }
-                    ).fetchone()
-
-                    if existing_lifecycle:
-                        s.execute(
-                            text("""
-                                UPDATE student_lifecycle_status
-                                SET status_id = :status_id,
-                                    last_updated_date = NOW()
-                                WHERE student_lifecycle_status_id = :lifecycle_id;
-                            """),
-                            {
-                                "status_id": status_id,
-                                "lifecycle_id": existing_lifecycle[0]
-                            }
-                        )
-                    else:
-                        stage_started_date = import_date if stage_name == active_stage else None
-                        stage_started_date_source = "System Assigned" if stage_name == active_stage else None
-
-                        s.execute(
-                            text("""
-                                INSERT INTO student_lifecycle_status (
-                                    student_number, stage_id, status_id, term_id,
-                                    stage_started_date, stage_started_date_source,
-                                    last_updated_date
-                                )
-                                VALUES (
-                                    :student_number, :stage_id, :status_id, :term_id,
-                                    :stage_started_date, :stage_started_date_source,
-                                    NOW()
-                                );
-                            """),
-                            {
-                                "student_number": student_number,
-                                "stage_id": stage_id,
-                                "status_id": status_id,
-                                "term_id": term_id,
-                                "stage_started_date": stage_started_date,
-                                "stage_started_date_source": stage_started_date_source
-                            }
-                        )
-                        imported_lifecycle += 1
-
-            s.commit()
-
-        try:
-            load_students.clear()
-        except Exception:
-            pass
-
-        try:
-            fetch_student_lifecycle.clear()
-        except Exception:
-            pass
-
-        try:
-            fetch_student_courses.clear()
-        except Exception:
-            pass
-
-        try:
-            log_security_event(
-                user["user_id"],
-                "DATA_IMPORT_COMPLETED",
-                f"Imported academic data for term '{selected_term_code}'. New students: {imported_students}; updated students: {updated_students}; courses: {imported_courses}; lifecycle records: {imported_lifecycle}."
-            )
-        except Exception:
-            pass
-
-        for key in [
-            "import_loaded_file", "import_preview_df", "import_detected_columns",
-            "import_course_columns", "import_warnings", "import_errors",
-            "import_focus_row", "import_focus_column", "import_manual_df"
-        ]:
-            st.session_state.pop(key, None)
-
-        st.success(f"✓ Import completed successfully for {format_term_label(selected_term_code)}.")
-        st.info(f"New students: {imported_students} · Updated students: {updated_students} · Courses: {imported_courses} · Lifecycle records: {imported_lifecycle}")
-        st.rerun()
-
-    except Exception as e:
-        try:
-            s.rollback()
-        except Exception:
-            pass
-
-        st.error("The import could not be completed. No changes should be considered finalized.")
-        st.exception(e)
 # ------------------------------------------------------------------
 # DATA LOADERS (DYNAMICALLY MAPPED & FILTERED BY PROGRAM)
 # ------------------------------------------------------------------
@@ -1124,10 +173,7 @@ def get_cohort_val(c):
     return float(f"{m.group(2)}{m.group(3)}.{m.group(1)}") if m else 0.0
 
 @st.cache_data(ttl=60, show_spinner="Loading mapped student roster...")
-def load_students(
-    target_program: str,
-    selected_term_id: int | None = None
-) -> tuple[pd.DataFrame, str]:
+def load_students(target_program: str) -> tuple[pd.DataFrame, str]:
     # 1. Fetch Program-Specific Thresholds
     try:
         t_query = text("""
@@ -1152,52 +198,26 @@ def load_students(
                 a.full_name AS adviser, s.graduate_on_time, s.graduate_date_term_sy, 
                 s.remarks, s.created_at, c.cohort_code AS cohort, 
                 p.program_code AS program, p.program_name AS program_name,
-
-                et.term_id,
-
                 MAX(CASE WHEN stg.stage_name = 'coursework' THEN sts.status_name END) AS coursework_status,
                 MAX(CASE WHEN stg.stage_name = 'comprehensive_exam' THEN sts.status_name END) AS comprehensive_exam,
                 MAX(CASE WHEN stg.stage_name = 'capstone' THEN sts.status_name END) AS capstone,
                 MAX(CASE WHEN stg.stage_name = 'coursework' THEN sls.last_updated_date END) AS updated_at,
                 MAX(CASE WHEN stg.stage_name = 'coursework' THEN sls.last_updated_date END) AS cw_updated_at,
                 MAX(CASE WHEN stg.stage_name = 'comprehensive_exam' THEN sls.last_updated_date END) AS ce_updated_at,
-                MAX(CASE WHEN stg.stage_name = 'capstone' THEN sls.last_updated_date END) AS cap_updated_at,
-                MAX(CASE WHEN stg.stage_name = 'coursework' THEN sls.stage_started_date END) AS cw_started_at,
-                MAX(CASE WHEN stg.stage_name = 'comprehensive_exam' THEN sls.stage_started_date END) AS ce_started_at,
-                MAX(CASE WHEN stg.stage_name = 'capstone' THEN sls.stage_started_date END) AS cap_started_at
-
+                MAX(CASE WHEN stg.stage_name = 'capstone' THEN sls.last_updated_date END) AS cap_updated_at
             FROM students_normalized s
-
-            LEFT JOIN (
-                SELECT DISTINCT student_number, term_id
-                FROM student_course_enrollments
-                WHERE term_id IS NOT NULL
-            ) et
-                ON s.student_number = et.student_number
-
             LEFT JOIN cohort c ON s.cohort_id = c.cohort_id
             LEFT JOIN program p ON s.program_id = p.program_id
             LEFT JOIN advisers a ON s.adviser_id = a.adviser_id
-            LEFT JOIN student_lifecycle_status sls
-                ON s.student_number = sls.student_number
-                AND (
-                    :selected_term_id IS NULL
-                    OR sls.term_id = :selected_term_id
-                )
+            LEFT JOIN student_lifecycle_status sls ON s.student_number = sls.student_number
             LEFT JOIN lifecycle_stage stg ON sls.stage_id = stg.stage_id
             LEFT JOIN lifecycle_status sts ON sls.status_id = sts.status_id
-
             GROUP BY 
                 s.student_number, s.student_email, s.first_name, s.last_name, 
                 a.full_name, s.graduate_on_time, s.graduate_date_term_sy, 
-                s.remarks, s.created_at, c.cohort_code, p.program_code, 
-                p.program_name, et.term_id;
+                s.remarks, s.created_at, c.cohort_code, p.program_code, p.program_name;
         """
-        df = conn.query(
-            query,
-            params={"selected_term_id": selected_term_id},
-            ttl=0
-        )
+        df = conn.query(query, ttl=0)
     except Exception:
         df = pd.DataFrame()
     
@@ -1234,45 +254,30 @@ def load_students(
 
     # 3. Calculate "At Risk" Flags
     now_utc = pd.Timestamp.utcnow()
-
     def calculate_risk(row):
         reasons = []
-
-        if row.get("coursework_display") == "Pending":
-            start_date = row.get("cw_started_at") if pd.notna(row.get("cw_started_at")) else row.get("cw_updated_at")
-
-            if pd.notna(start_date):
-                days = (now_utc - pd.to_datetime(start_date, utc=True)).days
-                if days > cw_thresh:
-                    reasons.append(f"Coursework pending for {days} days (Limit: {cw_thresh})")
-
-        if row.get("comprehensive_exam_display") == "In-Progress":
-            start_date = row.get("ce_started_at") if pd.notna(row.get("ce_started_at")) else row.get("ce_updated_at")
-
-            if pd.notna(start_date):
-                days = (now_utc - pd.to_datetime(start_date, utc=True)).days
-                if days > ce_thresh:
-                    reasons.append(f"Exam in-progress for {days} days (Limit: {ce_thresh})")
-
-        if row.get("capstone_display") == "In-Progress":
-            start_date = row.get("cap_started_at") if pd.notna(row.get("cap_started_at")) else row.get("cap_updated_at")
-
-            if pd.notna(start_date):
-                days = (now_utc - pd.to_datetime(start_date, utc=True)).days
-                if days > cap_thresh:
-                    reasons.append(f"Capstone in-progress for {days} days (Limit: {cap_thresh})")
-
+        if row.get('coursework_display') == 'Pending' and pd.notna(row.get('cw_updated_at')):
+            days = (now_utc - pd.to_datetime(row['cw_updated_at'], utc=True)).days
+            if days > cw_thresh: reasons.append(f"Coursework pending for {days} days (Limit: {cw_thresh})")
+            
+        if row.get('comprehensive_exam_display') == 'In-Progress' and pd.notna(row.get('ce_updated_at')):
+            days = (now_utc - pd.to_datetime(row['ce_updated_at'], utc=True)).days
+            if days > ce_thresh: reasons.append(f"Exam in-progress for {days} days (Limit: {ce_thresh})")
+            
+        if row.get('capstone_display') == 'In-Progress' and pd.notna(row.get('cap_updated_at')):
+            days = (now_utc - pd.to_datetime(row['cap_updated_at'], utc=True)).days
+            if days > cap_thresh: reasons.append(f"Capstone in-progress for {days} days (Limit: {cap_thresh})")
+            
         return " | ".join(reasons) if reasons else ""
 
-    df["risk_details"] = df.apply(calculate_risk, axis=1)
-    df["is_at_risk"] = df["risk_details"] != ""
-    df["risk_flag"] = df["is_at_risk"].apply(lambda x: "At Risk" if x else "On Track")
+    df['risk_details'] = df.apply(calculate_risk, axis=1)
+    df['is_at_risk'] = df['risk_details'] != ""
+    df['risk_flag'] = df['is_at_risk'].apply(lambda x: "Flagged" if x else "On Track")
 
     # Time parsing
     def to_manila_time(series):
         dt = pd.to_datetime(series, errors="coerce")
-        if dt.dt.tz is None:
-            dt = dt.dt.tz_localize("UTC")
+        if dt.dt.tz is None: dt = dt.dt.tz_localize("UTC")
         return dt.dt.tz_convert("Asia/Manila").dt.strftime("%B %d, %Y at %I:%M %p")
 
     if "updated_at" in df.columns and df["updated_at"].notna().any():
@@ -1288,8 +293,8 @@ def load_students(
     return df, sync_time
 
 @st.cache_data(ttl=60)
-def fetch_student_courses(student_number: int, selected_term_id: int | None = None) -> pd.DataFrame:
-    query = """
+def fetch_student_courses(student_number: int) -> pd.DataFrame:
+    query = f"""
         SELECT 
             UPPER(e.course_code) AS "Course Code",
             COALESCE(c.course_name, 'Course Unit') AS "Course Name",
@@ -1297,38 +302,36 @@ def fetch_student_courses(student_number: int, selected_term_id: int | None = No
             INITCAP(e.status) AS "Status"
         FROM student_course_enrollments e
         LEFT JOIN courses c ON e.course_code = c.course_code
-        WHERE e.student_number = :student_number
-          AND (:selected_term_id IS NULL OR e.term_id = :selected_term_id)
+        WHERE e.student_number = {int(student_number)}
         ORDER BY e.course_code ASC;
     """
-    try: return conn.query(query, params={"student_number": int(student_number), "selected_term_id": selected_term_id}, ttl=0)
+    try: return conn.query(query, ttl=0)
     except Exception: return pd.DataFrame()
 
 @st.cache_data(ttl=60)
-def fetch_student_lifecycle(student_number: int, selected_term_id: int | None = None) -> pd.DataFrame:
-    query = """
+def fetch_student_milestones(student_number: int) -> pd.DataFrame:
+    query = f"""
         SELECT 
             stg.stage_name AS milestone_type,
             INITCAP(REPLACE(stg.stage_name, '_', ' ')) AS "Milestone",
             INITCAP(sts.status_name) AS "Recorded Status",
-            sls.stage_started_date AS "Stage Started",
             sls.last_updated_date AS "Last Updated"
         FROM student_lifecycle_status sls
         JOIN lifecycle_stage stg ON sls.stage_id = stg.stage_id
         JOIN lifecycle_status sts ON sls.status_id = sts.status_id
-        WHERE sls.student_number = :student_number
-          AND (:selected_term_id IS NULL OR sls.term_id = :selected_term_id)
+        WHERE sls.student_number = {int(student_number)}
         ORDER BY stg.stage_id ASC;
     """
-    try:
-        df = conn.query(query, params={"student_number": int(student_number), "selected_term_id": selected_term_id}, ttl=0)
+    try: 
+        df = conn.query(query, ttl=0)
         if not df.empty and "Last Updated" in df.columns and df["Last Updated"].notna().any():
             dt = pd.to_datetime(df["Last Updated"], errors="coerce")
             if dt.dt.tz is None: dt = dt.dt.tz_localize("UTC")
             df["Last Updated"] = dt.dt.tz_convert("Asia/Manila").dt.strftime("%B %d, %Y at %I:%M %p")
         return df
-    except Exception:
+    except Exception: 
         return pd.DataFrame()
+
 # ------------------------------------------------------------------
 # SESSION STATE MANAGEMENT
 # ------------------------------------------------------------------
@@ -1402,6 +405,7 @@ if not st.session_state.authenticated:
 # AUTHENTICATED USER HEADER & NAVIGATION
 # ------------------------------------------------------------------
 user = st.session_state.user_info
+
 # Use columns [1, 2, 1] to make the center column exactly 50% width
 logo_left, logo_center, logo_right = st.sidebar.columns([1, 6, 1])
 with logo_center:
@@ -1415,9 +419,7 @@ if "admin_view" not in st.session_state:
 
 # 1. Define core app navigation options vs admin configuration options
 core_nav_options = ["Executive Dashboard", "Student Roster", "Student Profile Inspector"]
-if user.get("can_import", False):
-    core_nav_options.append("Add Data")
-admin_nav_options = ["Global Instance Settings", "Schema Mapping Config", "Permissions & Audit Logs", "Academic Terms"]
+admin_nav_options = ["Global Instance Settings", "Schema Mapping Config", "Permissions & Audit Logs"]
 
 # Ensure current view is valid
 all_valid_options = core_nav_options + (admin_nav_options if user["role"] == "IT/Admin" else [])
@@ -1431,9 +433,8 @@ if user["role"] == "IT/Admin":
     with st.sidebar.expander("⚙️ Admin Configuration", expanded=is_currently_admin):
         admin_nav_config = {
             "Global Instance Settings": "GLOBAL INSTANCE SETTINGS",
-            "Schema Mapping Config": "SCHEMA MAPPING CONFIGURATION",
-            "Permissions & Audit Logs": "PERMISSIONS & AUDIT LOGS",
-            "Academic Terms": "ACADEMIC TERMS"
+            "Schema Mapping Config": "SCHEMA MAPPING CONFIG",
+            "Permissions & Audit Logs": "PERMISSIONS & AUDIT LOGS"
         }
         
         for opt in admin_nav_options:
@@ -1516,8 +517,7 @@ section[data-testid="stSidebar"] .stButton button:hover {
 nav_config = {
     "Executive Dashboard": "EXECUTIVE DASHBOARD",
     "Student Roster": "STUDENT ROSTER",
-    "Student Profile Inspector": "STUDENT PROFILE",
-    "Add Data": "ADD DATA"
+    "Student Profile Inspector": "STUDENT PROFILE"
 }
 
 for opt in core_nav_options:
@@ -1645,12 +645,15 @@ def render_instance_settings():
                 load_students.clear()
             except Exception as e:
                 st.error(f"Error saving thresholds: {e}")
+
+
 # ------------------------------------------------------------------
 # VIEW: IT/ADMIN SCHEMA CONFIGURATION
 # ------------------------------------------------------------------
 def render_schema_mapping():
     st.subheader("⚙️ Dynamic Schema Field Mapping")
     st.caption("Map dashboard UI elements directly to the underlying SQL database columns. No code deployment required.")
+
     try:
         actual_cols_df = conn.query("""
             SELECT column_name FROM information_schema.columns WHERE table_name = 'students_normalized'
@@ -1716,74 +719,27 @@ def render_permissions_and_logs():
     t_perms, t_logs, t_syslogs = st.tabs(["User Permissions", "Live Audit Logs", "System Sync Failures"])
     
     with t_perms:
-        users_df = conn.query(
-            "SELECT user_id, username, full_name, role, can_edit, can_import FROM app_users ORDER BY user_id;",
-            ttl=0
-        )
+        users_df = conn.query("SELECT user_id, username, full_name, role, can_edit FROM app_users ORDER BY user_id;", ttl=0)
+        st.dataframe(users_df, hide_index=True, use_container_width=True)
 
-        st.dataframe(
-            users_df,
-            hide_index=True,
-            use_container_width=True
-        )
-
-        st.markdown("##### ✏️ Modify User Permissions")
-
+        st.markdown("##### ✏️ Modify User Edit Permissions")
         with st.form("admin_perm_form"):
-            target_username = st.selectbox(
-                "Select User Account",
-                users_df["username"].tolist()
-            )
-
-            target_user_row = users_df[
-                users_df["username"] == target_username
-            ].iloc[0]
-
-            new_can_edit = st.checkbox(
-                "Grant Write / Edit Capability",
-                value=bool(target_user_row["can_edit"])
-            )
-
-            new_can_import = st.checkbox(
-                "Grant Add Data / Import Capability",
-                value=bool(target_user_row["can_import"])
-            )
-
+            target_username = st.selectbox("Select User Account", users_df["username"].tolist())
+            new_can_edit = st.checkbox("Grant Write / Edit Capability")
+            
             if st.form_submit_button("Update Access Level"):
                 try:
                     with conn.session as s:
                         s.execute(
-                            text("""
-                                UPDATE app_users
-                                SET
-                                    can_edit = :ce,
-                                    can_import = :ci
-                                WHERE username = :u;
-                            """),
-                            {
-                                "ce": new_can_edit,
-                                "ci": new_can_import,
-                                "u": target_username
-                            }
+                            text("UPDATE app_users SET can_edit = :ce WHERE username = :u;"),
+                            {"ce": new_can_edit, "u": target_username}
                         )
                         s.commit()
-
-                    log_security_event(
-                        user["user_id"],
-                        "PERMISSIONS_UPDATED",
-                        f"Updated can_edit={new_can_edit}, can_import={new_can_import} for user '{target_username}'."
-                    )
-
-                    st.success(
-                        f"Permissions successfully updated for {target_username}."
-                    )
-
+                    log_security_event(user["user_id"], "PERMISSIONS_UPDATED", f"Set can_edit={new_can_edit} for user '{target_username}'.")
+                    st.success(f"Permissions successfully updated for {target_username}.")
                     st.rerun()
-
                 except Exception as ex:
-                    st.error(
-                        f"Error updating permissions: {ex}"
-                    )
+                    st.error(f"Error updating permissions: {ex}")
 
     with t_logs:
         with t_logs:
@@ -1830,525 +786,56 @@ def render_permissions_and_logs():
                 st.success("✅ System is healthy. No synchronization errors logged.")
         else:
             st.success("✅ System is healthy. No synchronization errors logged.")
-# ------------------------------------------------------------------
-# VIEW: IT/ADMIN ACADEMIC TERM MANAGEMENT
-# ------------------------------------------------------------------
-def render_academic_terms():
-    st.subheader("📅 Academic Terms")
-    st.caption(
-        "Create and maintain academic terms used by the dashboard "
-        "for term-based filtering and historical reporting."
-    )
 
-    # --------------------------------------------------------------
-    # EDIT MODE
-    # --------------------------------------------------------------
-    editing_term_id = st.session_state.get("editing_term_id")
-
-    if editing_term_id is not None:
-
-        st.markdown("#### Edit Academic Term")
-
-        try:
-            edit_term_df = conn.query(
-                """
-                SELECT
-                    term_id,
-                    term_code,
-                    start_date,
-                    end_date
-                FROM term
-                WHERE term_id = :term_id;
-                """,
-                params={"term_id": editing_term_id},
-                ttl=0
-            )
-
-            if edit_term_df.empty:
-                st.error("The selected academic term could not be found.")
-                st.session_state.editing_term_id = None
-                st.rerun()
-
-            else:
-                current_term = edit_term_df.iloc[0]
-
-                with st.form("edit_academic_term_form"):
-
-                    edit_term_code = st.text_input(
-                        "Term Code",
-                        value=str(current_term["term_code"]),
-                        help="Official academic term code."
-                    ).strip().upper()
-
-                    edit_col1, edit_col2 = st.columns(2)
-
-                    with edit_col1:
-                        edit_start_date = st.date_input(
-                            "Start Date",
-                            value=pd.to_datetime(
-                                current_term["start_date"]
-                            ).date(),
-                            help="Official beginning date of the academic term."
-                        )
-
-                    with edit_col2:
-                        edit_end_date = st.date_input(
-                            "End Date",
-                            value=pd.to_datetime(
-                                current_term["end_date"]
-                            ).date(),
-                            help="Official ending date of the academic term."
-                        )
-
-                    save_edit = st.form_submit_button(
-                        "Save Changes",
-                        type="primary",
-                        use_container_width=True
-                    )
-
-                if st.button(
-                    "Cancel",
-                    use_container_width=True
-                ):
-                    st.session_state.editing_term_id = None
-                    st.rerun()
-
-                if save_edit:
-
-                    # --------------------------------------------------
-                    # VALIDATE EDITED TERM
-                    # --------------------------------------------------
-                    if not edit_term_code:
-                        st.error("Please enter a term code.")
-
-                    elif not re.match(
-                        r"^\d[TQ]\d{4}$",
-                        edit_term_code
-                    ):
-                        st.error(
-                            "Invalid term code format. Use the format "
-                            "1T2526 or 1Q2627."
-                        )
-
-                    elif edit_end_date < edit_start_date:
-                        st.error(
-                            "End Date cannot be earlier than Start Date."
-                        )
-
-                    else:
-                        try:
-                            with conn.session as s:
-
-                                # Check whether another term already
-                                # uses the edited term code.
-                                duplicate_term = s.execute(
-                                    text("""
-                                        SELECT term_id
-                                        FROM term
-                                        WHERE term_code = :term_code
-                                          AND term_id <> :term_id;
-                                    """),
-                                    {
-                                        "term_code": edit_term_code,
-                                        "term_id": editing_term_id
-                                    }
-                                ).fetchone()
-
-                                if duplicate_term:
-                                    st.error(
-                                        f"Academic term {edit_term_code} "
-                                        "already exists."
-                                    )
-
-                                else:
-                                    # Update the term
-                                    s.execute(
-                                        text("""
-                                            UPDATE term
-                                            SET
-                                                term_code = :term_code,
-                                                start_date = :start_date,
-                                                end_date = :end_date
-                                            WHERE term_id = :term_id;
-                                        """),
-                                        {
-                                            "term_code": edit_term_code,
-                                            "start_date": edit_start_date,
-                                            "end_date": edit_end_date,
-                                            "term_id": editing_term_id
-                                        }
-                                    )
-
-                                    s.commit()
-
-                                    log_security_event(
-                                        user["user_id"],
-                                        "ACADEMIC_TERM_UPDATED",
-                                        f"Updated academic term "
-                                        f"{edit_term_code} "
-                                        f"({edit_start_date} to "
-                                        f"{edit_end_date})."
-                                    )
-
-                                    st.session_state.editing_term_id = None
-
-                                    st.success(
-                                        f"Academic term {edit_term_code} "
-                                        "was successfully updated."
-                                    )
-
-                                    st.rerun()
-
-                        except Exception as e:
-                            st.error(
-                                f"Error updating academic term: {e}"
-                            )
-
-        except Exception as e:
-            st.error(
-                f"Error loading academic term: {e}"
-            )
-
-    # --------------------------------------------------------------
-    # ADD NEW TERM MODE
-    # --------------------------------------------------------------
-    else:
-
-        st.markdown("#### Add New Academic Term")
-
-        with st.form("add_academic_term_form"):
-
-            term_code = st.text_input(
-                "Term Code",
-                placeholder="e.g. 1Q2627",
-                help=(
-                    "Enter the official academic term code "
-                    "used by the institution."
-                )
-            ).strip().upper()
-
-            date_col1, date_col2 = st.columns(2)
-
-            with date_col1:
-                start_date = st.date_input(
-                    "Start Date",
-                    help="Official beginning date of the academic term."
-                )
-
-            with date_col2:
-                end_date = st.date_input(
-                    "End Date",
-                    help="Official ending date of the academic term."
-                )
-
-            submitted = st.form_submit_button(
-                "Add Academic Term",
-                type="primary",
-                use_container_width=True
-            )
-
-            if submitted:
-
-                # --------------------------------------------------
-                # VALIDATE NEW TERM
-                # --------------------------------------------------
-                if not term_code:
-                    st.error("Please enter a term code.")
-
-                elif not re.match(
-                    r"^\d[TQ]\d{4}$",
-                    term_code
-                ):
-                    st.error(
-                        "Invalid term code format. Use the format "
-                        "1T2526 or 1Q2627."
-                    )
-
-                elif end_date < start_date:
-                    st.error(
-                        "End Date cannot be earlier than Start Date."
-                    )
-
-                else:
-                    try:
-                        with conn.session as s:
-
-                            # Check for duplicate term code
-                            existing_term = s.execute(
-                                text("""
-                                    SELECT term_id
-                                    FROM term
-                                    WHERE term_code = :term_code;
-                                """),
-                                {
-                                    "term_code": term_code
-                                }
-                            ).fetchone()
-
-                            if existing_term:
-                                st.error(
-                                    f"Academic term {term_code} "
-                                    "already exists."
-                                )
-
-                            else:
-
-                                # Insert new term
-                                s.execute(
-                                    text("""
-                                        INSERT INTO term (
-                                            term_code,
-                                            start_date,
-                                            end_date
-                                        )
-                                        VALUES (
-                                            :term_code,
-                                            :start_date,
-                                            :end_date
-                                        );
-                                    """),
-                                    {
-                                        "term_code": term_code,
-                                        "start_date": start_date,
-                                        "end_date": end_date
-                                    }
-                                )
-
-                                s.commit()
-
-                                log_security_event(
-                                    user["user_id"],
-                                    "ACADEMIC_TERM_CREATED",
-                                    f"Created academic term "
-                                    f"{term_code} "
-                                    f"({start_date} to {end_date})."
-                                )
-
-                                st.success(
-                                    f"Academic term {term_code} "
-                                    "was successfully added."
-                                )
-
-                                st.rerun()
-
-                    except Exception as e:
-                        st.error(
-                            f"Error creating academic term: {e}"
-                        )
-
-    # --------------------------------------------------------------
-    # EXISTING TERMS
-    # --------------------------------------------------------------
-    st.divider()
-    st.markdown("#### Existing Academic Terms")
-
-    try:
-        terms_df = conn.query(
-            """
-            SELECT
-                term_id,
-                term_code,
-                start_date,
-                end_date
-            FROM term
-            ORDER BY start_date DESC NULLS LAST, term_code DESC;
-            """,
-            ttl=0
-        )
-
-        if terms_df.empty:
-            st.info("No academic terms have been configured yet.")
-
-        else:
-
-            for _, term_row in terms_df.iterrows():
-
-                term_id = int(term_row["term_id"])
-                term_code_display = str(term_row["term_code"])
-
-                start_display = (
-                    str(term_row["start_date"])
-                    if pd.notna(term_row["start_date"])
-                    else "Not set"
-                )
-
-                end_display = (
-                    str(term_row["end_date"])
-                    if pd.notna(term_row["end_date"])
-                    else "Not set"
-                )
-
-                term_col1, term_col2, term_col3, term_col4 = st.columns(
-                    [1.5, 2, 2, 1]
-                )
-
-                with term_col1:
-                    st.markdown(
-                        f"**{term_code_display}**"
-                    )
-
-                with term_col2:
-                    st.write(
-                        f"Start: {start_display}"
-                    )
-
-                with term_col3:
-                    st.write(
-                        f"End: {end_display}"
-                    )
-
-                with term_col4:
-                    if st.button(
-                        "✏️ Edit",
-                        key=f"edit_term_{term_id}",
-                        use_container_width=True
-                    ):
-                        st.session_state.editing_term_id = term_id
-                        st.rerun()
-
-                st.divider()
-
-    except Exception as e:
-        st.error(
-            f"Error loading academic terms: {e}"
-        )
-    # --------------------------------------------------------------
-    # EXISTING TERMS
-    # --------------------------------------------------------------
-    st.divider()
-    st.markdown("#### Existing Academic Terms")
-
-    try:
-        terms_df = conn.query(
-            """
-            SELECT
-                term_id,
-                term_code,
-                start_date,
-                end_date
-            FROM term
-            ORDER BY start_date DESC NULLS LAST, term_code DESC;
-            """,
-            ttl=0
-        )
-
-        if terms_df.empty:
-            st.info("No academic terms have been configured yet.")
-
-        else:
-            display_terms_df = terms_df.copy()
-
-            display_terms_df = display_terms_df.rename(
-                columns={
-                    "term_id": "ID",
-                    "term_code": "Term Code",
-                    "start_date": "Start Date",
-                    "end_date": "End Date"
-                }
-            )
-
-            st.dataframe(
-                display_terms_df,
-                hide_index=True,
-                use_container_width=True
-            )
-
-    except Exception as e:
-        st.error(
-            f"Error loading academic terms: {e}"
-        )
-        
 def render_completion_trend_chart(df_all, active_program):
-    terms_df = conn.query("""
-        SELECT term_id, term_code, start_date
-        FROM term
-        WHERE start_date IS NOT NULL
-        ORDER BY start_date DESC
-        LIMIT 4;
-    """, ttl=0)
-
-    if terms_df.empty:
-        st.info("No academic terms are available for the completion trend.")
+    if df_all.empty:
+        st.info("No data available to display completion trends.")
+        return
+    df_all['is_completed'] = df_all['coursework_display'] == 'Completed'
+    trend_df = df_all.groupby('cohort').agg(
+        total_students=('coursework_display', 'count'),
+        completed_students=('is_completed', 'sum')
+    ).reset_index()
+    
+    trend_df['completion_rate'] = (trend_df['completed_students'] / trend_df['total_students']) * 100
+    trend_df['sort_year'] = trend_df['cohort'].astype(str).str.extract(r'[TQ](\d{2})').astype(float)
+    trend_df['sort_term'] = trend_df['cohort'].astype(str).str.extract(r'^(\d)[TQ]').astype(float)
+    
+    trend_df = trend_df.dropna(subset=['sort_year', 'sort_term']).sort_values(by=['sort_year', 'sort_term']).tail(4) 
+    
+    if trend_df.empty:
+        st.info("Not enough standard cohort terms (e.g., 1Q2425) to form a trend line.")
         return
 
-    trend_rows = []
-
-    for _, term in terms_df.iterrows():
-        term_id = int(term["term_id"])
-        term_code = str(term["term_code"])
-
-        lifecycle_count = conn.query("""
-            SELECT COUNT(*) AS record_count
-            FROM student_lifecycle_status
-            WHERE term_id = :term_id;
-        """, params={"term_id": term_id}, ttl=0)
-
-        has_data = (
-            not lifecycle_count.empty and
-            int(lifecycle_count.iloc[0]["record_count"]) > 0
-        )
-
-        completion_rate = None
-
-        if has_data:
-            term_df, _ = load_students(active_program, term_id)
-
-            if not term_df.empty:
-                total_students = len(term_df)
-
-                fully_completed = len(
-                    term_df[
-                        (term_df["coursework_display"] == "Completed") &
-                        (term_df["comprehensive_exam_display"] == "Passed") &
-                        (term_df["capstone_display"] == "Defended")
-                    ]
-                )
-
-                if total_students > 0:
-                    completion_rate = fully_completed / total_students * 100
-
-        trend_rows.append({
-            "term_code": term_code,
-            "completion_rate": completion_rate,
-            "sort_date": term["start_date"]
-        })
-
-    trend_df = pd.DataFrame(trend_rows).sort_values("sort_date")
-
     fig = px.line(
-        trend_df,
-        x="term_code",
-        y="completion_rate",
-        markers=True,
-        text="completion_rate",
-        labels={"term_code": "Academic Term", "completion_rate": "Completion Rate (%)"}
+        trend_df, x="cohort", y="completion_rate", markers=True,
+        text="completion_rate", # Binds the data values to text labels
+        labels={"cohort": "Academic Term", "completion_rate": "Completion Rate (%)"}
     )
-
+    
     fig.update_layout(
-        height=377,
+        height=377, # Explicitly matched height
         yaxis_title="Completion Rate (%)",
         xaxis_title="Academic Term",
-        yaxis=dict(range=[-5, 115], fixedrange=True),
-        xaxis=dict(fixedrange=True),
+        yaxis=dict(range=[-5, 115], fixedrange=True), 
+        xaxis=dict(fixedrange=True), 
         hovermode="x unified",
         margin=dict(l=10, r=10, t=30, b=10)
     )
-
+    
+    # Format the labels as 1-decimal percentages and place them above the markers
     fig.update_traces(
-        line_color="#D50000",
-        marker=dict(color="#FFAE00", size=8),
-        line_width=3,
-        texttemplate="%{text:.2f}%",
-        textposition="top center",
-        textfont=dict(size=12, color="var(--text-color)"),
-        connectgaps=False
+        line_color="#D50000", # Program palette red for the trend line
+        marker=dict(color="#FFAE00", size=8), # Program palette yellow for the dots
+        line_width=3, 
+        texttemplate='%{text:.1f}%', 
+        textposition='top center',
+        textfont=dict(size=12, color="var(--text-color)")
     )
-
-    st.subheader(
-        "Completion Trend — Last 4 Terms",
-        help="Shows the percentage of students who fully completed Coursework, Comprehensive Exam, and Capstone in each academic term."
-    )
+    
+    st.subheader(f"Completion Trend — Last 4 Terms", help="Shows the percentage of students in each cohort who have successfully completed all core coursework.")
     st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+
 # ------------------------------------------------------------------
 # VIEW 1: STUDENT ROSTER (Dashboard)
 # ------------------------------------------------------------------
@@ -2364,7 +851,7 @@ def render_student_list(df_all):
         .status-pill { background-color: #f0f2f6; padding: 4px 8px; border-radius: 12px; font-size: 0.8rem; color: #31333F !important; font-weight: 600; }
         .sr-risk-pill { background-color: #D500001A; color: #D50000; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
         .sr-risk-none { background-color: #0080001A; color: #008000; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
-        .sr-risk-row {background-color: #FDE2E2 !important; border-radius: 6px; }
+        
         /* Force standard buttons to allow multi-line text */
         div[data-testid="stButton"] button p {
             white-space: normal !important;
@@ -2395,67 +882,37 @@ def render_student_list(df_all):
             with st.container(border=False, height=500):
                 for row in display_df.to_dict("records"):
                     r_cols = st.columns(col_widths, vertical_alignment="center")
-
-                    r_cols[0].markdown(
-                        f'<span class="roster-cell-id">{row.get("Student ID", "")}</span>',
-                        unsafe_allow_html=True
-                    )
-                    r_cols[1].markdown(
-                        f'<span class="roster-cell-text" style="font-weight: bold;">{row.get("Name", "")}</span>',
-                        unsafe_allow_html=True
-                    )
-                    r_cols[2].markdown(
-                        f'<span class="roster-cell-text">{row.get("Cohort", "")}</span>',
-                        unsafe_allow_html=True
-                    )
-                    r_cols[3].markdown(
-                        f'<span class="roster-cell-text">{row.get("Adviser", "")}</span>',
-                        unsafe_allow_html=True
-                    )
-
-                    r_cols[4].markdown(
-                        get_stage_badge("coursework", row.get("Coursework", "")),
-                        unsafe_allow_html=True
-                    )
-                    r_cols[5].markdown(
-                        get_stage_badge("comprehensive_exam", row.get("Comprehensive Exam", "")),
-                        unsafe_allow_html=True
-                    )
-                    r_cols[6].markdown(
-                        get_stage_badge("capstone", row.get("Capstone", "")),
-                        unsafe_allow_html=True
-                    )
-
+                    
+                    r_cols[0].markdown(f'<span class="roster-cell-id">{row.get("Student ID", "")}</span>', unsafe_allow_html=True)
+                    r_cols[1].markdown(f'<span class="roster-cell-text" style="font-weight: bold;">{row.get("Name", "")}</span>', unsafe_allow_html=True)
+                    r_cols[2].markdown(f'<span class="roster-cell-text">{row.get("Cohort", "")}</span>', unsafe_allow_html=True)
+                    r_cols[3].markdown(f'<span class="roster-cell-text">{row.get("Adviser", "")}</span>', unsafe_allow_html=True)
+                    
+                    r_cols[4].markdown(get_stage_badge("coursework", row.get("Coursework", "")), unsafe_allow_html=True)
+                    r_cols[5].markdown(get_stage_badge("comprehensive_exam", row.get("Comprehensive Exam", "")), unsafe_allow_html=True)
+                    r_cols[6].markdown(get_stage_badge("capstone", row.get("Capstone", "")), unsafe_allow_html=True)
+                    
                     last_upd = row.get("Last Update", "")
                     display_date = last_upd if str(last_upd).strip() != "N/A" else "—"
-
-                    r_cols[7].markdown(
-                        f'<span class="roster-cell-text">{display_date}</span>',
-                        unsafe_allow_html=True
-                    )
-
+                    r_cols[7].markdown(f'<span class="roster-cell-text">{display_date}</span>', unsafe_allow_html=True)
+                    
                     risk_status = str(row.get("Risk Status", ""))
-
-                    r_cols[8].markdown(
-                        '<span class="sr-risk-pill">AT RISK</span>'
-                        if risk_status.strip() == "At Risk"
-                        else '<span class="sr-risk-none">ON TRACK</span>',
-                        unsafe_allow_html=True
-                    )
-
+                    if risk_status.strip() == "Flagged":
+                        r_cols[8].markdown('<span class="sr-risk-pill">FLAGGED</span>', unsafe_allow_html=True)
+                    else:
+                        r_cols[8].markdown('<span class="sr-risk-none">ON TRACK</span>', unsafe_allow_html=True)
+                    
                     with r_cols[9]:
+                        # Using on_click completely circumvents the instantiation error
                         st.button(
-                            "**View\nProfile**",
-                            key=f"view_{key_prefix}_{row.get('Student ID', '')}",
-                            use_container_width=True,
-                            on_click=go_to_profile,
+                            "**View\nProfile**", 
+                            key=f"view_{key_prefix}_{row.get('Student ID', '')}", 
+                            use_container_width=True, 
+                            on_click=go_to_profile, 
                             args=(row.get("Email", ""),)
                         )
-
-                    st.markdown(
-                        '<div class="roster-row-divider"></div>',
-                        unsafe_allow_html=True
-                    )
+                    
+                    st.markdown('<div class="roster-row-divider"></div>', unsafe_allow_html=True)
 
             st.caption(f"Showing {len(display_df)} students.")
 
@@ -2469,339 +926,130 @@ def render_student_list(df_all):
             "overall_status": "Overall Status", "coursework_display": "Coursework",
             "comprehensive_exam_display": "Comprehensive Exam", "capstone_display": "Capstone", "adviser": "Adviser", "student_email": "Email", "coursework_updated_at": "Last Update"
         })
-    # --- Shared Summary Data ---
+
+    active_cohort = st.session_state.get("cohort_filter", "All")
+    
+    if active_cohort == "All": 
+        summary_label = "All Cohorts"
+    elif len(active_cohort) == 6 and active_cohort[1] in ['T', 'Q']:
+        term_num = active_cohort[0]
+        term_type = active_cohort[1]
+        y1 = active_cohort[2:4]
+        y2 = active_cohort[4:6]
+        summary_label = f"{term_num}{term_type}, A.Y. 20{y1}–20{y2}"
+    else: 
+        summary_label = active_cohort
+
     df_summary = df_all.copy()
-    selected_adviser = "All"
-    selected_cohort = "All"
-    current_user = st.session_state.user_info.get("full_name", "")
+    if active_cohort != "All":
+        df_summary = df_summary[df_summary["cohort"].astype(str) == active_cohort]
+
     # --- RENDER EXECUTIVE DASHBOARD ---
     if st.session_state.admin_view == "Executive Dashboard":
+        st.markdown(f"#### Executive Summary — {summary_label}")
+        
         # --- Dashboard Filters (No Search or Sort) ---
-        term_col, cohort_col, adv_col = st.columns(3)
-
-        # =========================================================
-        # TERM FILTER
-        # =========================================================
-        with term_col:
-            available_terms_df = load_available_terms()
-            current_term = get_current_term()
-
-            if available_terms_df.empty:
-                st.warning("No academic terms are currently available.")
-                selected_term_id = None
-                selected_term_code = None
-
-            else:
-                term_options = available_terms_df["term_id"].tolist()
-
-                # Default to the current term
-                if "selected_term_id" not in st.session_state:
-                    if current_term is not None:
-                        st.session_state.selected_term_id = int(
-                            current_term["term_id"]
-                        )
-                    else:
-                        st.session_state.selected_term_id = int(
-                            term_options[0]
-                        )
-
-                # Make sure saved selection still exists
-                if st.session_state.selected_term_id not in term_options:
-                    st.session_state.selected_term_id = int(
-                        current_term["term_id"]
-                        if current_term is not None
-                        else term_options[0]
-                    )
-
-                selected_term_id = st.selectbox(
-                    "Filter by term",
-                    options=term_options,
-                    index=term_options.index(
-                        st.session_state.selected_term_id
-                    ),
-                    format_func=lambda term_id: format_term_label(
-                        available_terms_df.loc[
-                            available_terms_df["term_id"] == term_id,
-                            "term_code"
-                        ].iloc[0]
-                    ),
-                    key="dashboard_term_filter"
-                )
-
-                st.session_state.selected_term_id = selected_term_id
-
-                selected_term_code = available_terms_df.loc[
-                    available_terms_df["term_id"] == selected_term_id,
-                    "term_code"
-                ].iloc[0]
-
-        # =========================================================
-        # COHORT FILTER
-        # =========================================================
+        cohort_col, adv_col = st.columns(2)
         with cohort_col:
-            valid_cohorts = sorted(
-                [
-                    str(c)
-                    for c in df_all["cohort"].dropna().unique().tolist()
-                    if str(c).strip()
-                ],
-                key=get_cohort_val
-            )
-
-            selected_cohort = st.selectbox(
-                "Filter by cohort",
-                ["All"] + valid_cohorts,
-                key="cohort_filter"
-            )
-
-        # =========================================================
-        # ADVISER FILTER
-        # =========================================================
+            valid_cohorts = sorted([str(c) for c in df_all["cohort"].dropna().unique().tolist() if str(c).strip()], key=get_cohort_val)
+            selected_cohort = st.selectbox("Filter by cohort", ["All"] + valid_cohorts, key="cohort_filter")
         with adv_col:
-            valid_advisers = sorted(
-                [
-                    str(a)
-                    for a in df_all["adviser"].dropna().unique().tolist()
-                    if str(a).strip()
-                ]
-            )
-
+            valid_advisers = sorted([str(a) for a in df_all["adviser"].dropna().unique().tolist() if str(a).strip()])
             current_user = st.session_state.user_info.get("full_name", "")
             user_role = st.session_state.user_info.get("role", "")
-
+            
             if "Advisor" in user_role or "Faculty" in user_role:
-                adv_view = st.selectbox(
-                    "Adviser View",
-                    ["My Advisees", "All Students"],
-                    key="adv_view_toggle"
-                )
-
-                selected_adviser = (
-                    current_user
-                    if adv_view == "My Advisees"
-                    else "All"
-                )
+                adv_view = st.selectbox("Adviser View", ["My Advisees", "All Students"], key="adv_view_toggle")
+                selected_adviser = current_user if adv_view == "My Advisees" else "All"
             else:
-                default_idx = (
-                    valid_advisers.index(current_user) + 1
-                    if current_user in valid_advisers
-                    else 0
-                )
+                default_idx = valid_advisers.index(current_user) + 1 if current_user in valid_advisers else 0
+                selected_adviser = st.selectbox("Filter by Adviser", ["All"] + valid_advisers, index=default_idx, key="adviser_filter")
 
-                selected_adviser = st.selectbox(
-                    "Filter by Adviser",
-                    ["All"] + valid_advisers,
-                    index=default_idx,
-                    key="adviser_filter"
-                )
-
-        # =========================================================
-        # SELECTED TERM HEADING
-        # =========================================================
-        if selected_term_code:
-            st.markdown(
-                f"#### {format_term_label(selected_term_code)}"
-            )
-
-        # =========================================================
-        # APPLY COHORT + ADVISER FILTERS
-        # =========================================================
-        df_summary = df_all.copy()
-
-        if selected_term_id is not None:
-            df_summary = df_summary[
-                df_summary["term_id"] == selected_term_id
-            ]
-
-        if selected_cohort != "All":
-            df_summary = df_summary[
-                df_summary["cohort"].astype(str) == selected_cohort
-            ]
-
+        # Apply Adviser Filter to the dashboard metrics!
         if selected_adviser != "All":
-            df_summary = df_summary[
-                df_summary["adviser"].astype(str) == selected_adviser
-            ]
-
+            df_summary = df_summary[df_summary["adviser"].astype(str) == selected_adviser]
+            
         total_students = len(df_summary)
-        cw_completed = len(
-            df_summary[df_summary["coursework_display"] == "Completed"]
-        )
-        exam_passed = len(
-            df_summary[df_summary["comprehensive_exam_display"] == "Passed"]
-        )
-        capstone_defended = len(
-            df_summary[df_summary["capstone_display"] == "Defended"]
-        )
+        cw_completed = len(df_summary[df_summary["coursework_display"] == "Completed"])
+        exam_passed = len(df_summary[df_summary["comprehensive_exam_display"] == "Passed"])
+        capstone_defended = len(df_summary[df_summary["capstone_display"] == "Defended"])
 
         evaluated_df = df_summary[
-            df_summary["graduate_on_time"].notna() &
+            df_summary["graduate_on_time"].notna() & 
             (df_summary["graduate_on_time"].astype(str).str.strip() != "") &
-            (~df_summary["graduate_on_time"].astype(str).str.lower().isin(
-                ["n/a", "none"]
-            ))
+            (~df_summary["graduate_on_time"].astype(str).str.lower().isin(["n/a", "none"]))
         ]
-
-        grad_numerator = len(
-            evaluated_df[
-                evaluated_df["graduate_on_time"]
-                .astype(str)
-                .str.lower()
-                .isin(["yes", "y", "true", "1"])
-            ]
-        )
-
+        grad_numerator = len(evaluated_df[evaluated_df["graduate_on_time"].astype(str).str.lower().isin(["yes", "y", "true", "1"])])
         grad_denominator = total_students
-
-        on_time_rate = (
-            grad_numerator / grad_denominator * 100
-            if grad_denominator > 0
-            else 0.0
-        )
+        on_time_rate = (grad_numerator / grad_denominator * 100) if grad_denominator > 0 else 0.0
 
         fully_completed = len(
             df_summary[
-                (df_summary["coursework_display"] == "Completed") &
-                (df_summary["comprehensive_exam_display"] == "Passed") &
+                (df_summary["coursework_display"] == "Completed") & 
+                (df_summary["comprehensive_exam_display"] == "Passed") & 
                 (df_summary["capstone_display"] == "Defended")
             ]
         )
-
-        completion_rate = (
-            int((fully_completed / total_students * 100))
-            if total_students > 0
-            else 0
-        )
+        completion_rate = int((fully_completed / total_students * 100)) if total_students > 0 else 0
 
         remaining_students = int(total_students - fully_completed)
-        missing_coursework = len(
-            df_summary[df_summary["coursework_display"] != "Completed"]
-        )
-        missing_exam = len(
-            df_summary[df_summary["comprehensive_exam_display"] != "Passed"]
-        )
-        missing_capstone = len(
-            df_summary[df_summary["capstone_display"] != "Defended"]
-        )
+        missing_coursework = len(df_summary[df_summary["coursework_display"] != "Completed"])
+        missing_exam = len(df_summary[df_summary["comprehensive_exam_display"] != "Passed"])
+        missing_capstone = len(df_summary[df_summary["capstone_display"] != "Defended"])
 
         # --- TERM-OVER-TERM COMPARISON LOGIC ---
-        all_cohorts_sorted = sorted(
-            [
-                str(c)
-                for c in df_all["cohort"].dropna().unique()
-                if str(c).strip()
-            ],
-            key=get_cohort_val
-        )
-
+        all_cohorts_sorted = sorted([str(c) for c in df_all["cohort"].dropna().unique() if str(c).strip()], key=get_cohort_val)
+        
         prior_cohort = None
-
-        if selected_cohort != "All" and selected_cohort in all_cohorts_sorted:
-            idx = all_cohorts_sorted.index(selected_cohort)
-
+        if active_cohort != "All" and active_cohort in all_cohorts_sorted:
+            idx = all_cohorts_sorted.index(active_cohort)
             if idx > 0:
                 prior_cohort = all_cohorts_sorted[idx - 1]
 
         if prior_cohort:
-            df_prior = df_all[
-                df_all["cohort"].astype(str) == prior_cohort
-            ]
-
+            df_prior = df_all[df_all["cohort"].astype(str) == prior_cohort]
             p_total = len(df_prior)
-
+            
             p_eval = df_prior[
-                df_prior["graduate_on_time"].notna() &
+                df_prior["graduate_on_time"].notna() & 
                 (df_prior["graduate_on_time"].astype(str).str.strip() != "") &
-                (~df_prior["graduate_on_time"].astype(str).str.lower().isin(
-                    ["n/a", "none"]
-                ))
+                (~df_prior["graduate_on_time"].astype(str).str.lower().isin(["n/a", "none"]))
             ]
-
-            p_grad_num = len(
-                p_eval[
-                    p_eval["graduate_on_time"]
-                    .astype(str)
-                    .str.lower()
-                    .isin(["yes", "y", "true", "1"])
-                ]
-            )
-
-            p_on_time_rate = (
-                p_grad_num / p_total * 100
-                if p_total > 0
-                else 0.0
-            )
-
-            p_comp = len(
-                df_prior[
-                    (df_prior["coursework_display"] == "Completed") &
-                    (df_prior["comprehensive_exam_display"] == "Passed") &
-                    (df_prior["capstone_display"] == "Defended")
-                ]
-            )
-
-            p_comp_rate = (
-                int((p_comp / p_total * 100))
-                if p_total > 0
-                else 0.0
-            )
-
+            p_grad_num = len(p_eval[p_eval["graduate_on_time"].astype(str).str.lower().isin(["yes", "y", "true", "1"])])
+            p_on_time_rate = (p_grad_num / p_total * 100) if p_total > 0 else 0.0
+            
+            p_comp = len(df_prior[
+                (df_prior["coursework_display"] == "Completed") & 
+                (df_prior["comprehensive_exam_display"] == "Passed") & 
+                (df_prior["capstone_display"] == "Defended")
+            ])
+            p_comp_rate = int((p_comp / p_total * 100)) if p_total > 0 else 0.0
+            
             p_rem = p_total - p_comp
-
-            grad_delta_str = (
-                f"{on_time_rate - p_on_time_rate:+.1f}% vs {prior_cohort}"
-            )
-
-            comp_delta_str = (
-                f"{completion_rate - p_comp_rate:+.0f}% vs {prior_cohort}"
-            )
-
-            rem_delta_str = (
-                f"{remaining_students - p_rem:+} vs {prior_cohort}"
-            )
-
-        else:
-            grad_delta_str = (
-                f"{grad_numerator} out of {total_students} students"
-            )
-
-            comp_delta_str = (
-                f"{fully_completed} out of {total_students} students"
-            )
-
-            rem_delta_str = (
-                f"{remaining_students} out of {total_students} students"
-            )
+            
+            grad_delta_str = f"{on_time_rate - p_on_time_rate:+.1f}% vs {prior_cohort}"
+            comp_delta_str = f"{completion_rate - p_comp_rate:+.0f}% vs {prior_cohort}"
+            rem_delta_str = f"{remaining_students - p_rem:+} vs {prior_cohort}"
+            
             grad_color_mode = "normal"
             comp_color_mode = "normal"
             rem_color_mode = "inverse"
+        else:
+            grad_delta_str = f"{grad_numerator} out of {total_students} students"
+            comp_delta_str = f"{fully_completed} out of {total_students} students"
+            rem_delta_str = f"{remaining_students} out of {total_students} students"
+            
+            grad_color_mode = "normal" if on_time_rate >= 50 else "inverse"
+            comp_color_mode = "normal" if completion_rate >= 50 else "inverse"
+            
+            rem_percentage = (remaining_students / total_students * 100) if total_students > 0 else 0
+            rem_color_mode = "inverse" if rem_percentage > 50 else "normal"
 
         top_c1, top_c2, top_c3, top_c4 = st.columns(4)
-
-        top_c1.metric(
-            label="Total Students",
-            value=total_students,
-            help="Total students matching filters."
-        )
-
-        top_c2.metric(
-            label="Coursework",
-            value=cw_completed,
-            help="Completed required core coursework."
-        )
-
-        top_c3.metric(
-            label="Comprehensive Exam",
-            value=exam_passed,
-            help="Passed Comprehensive Examination."
-        )
-
-        top_c4.metric(
-            label="Capstones",
-            value=capstone_defended,
-            help="Defended and finalized Capstone project."
-        )
-
+        top_c1.metric(label="Total Students", value=total_students, help="Total students matching filters.")
+        top_c2.metric(label="Coursework", value=cw_completed, help="Completed required core coursework.")
+        top_c3.metric(label="Comprehensive Exam", value=exam_passed, help="Passed Comprehensive Examination.")
+        top_c4.metric(label="Capstones", value=capstone_defended, help="Defended and finalized Capstone project.")
         st.write("")
 
         st.markdown(
@@ -2995,7 +1243,20 @@ def render_student_list(df_all):
         search_col, cohort_col, adv_col, sort_col = st.columns([2, 1, 1.2, 1])
         
         with search_col: search_term = st.text_input("Search by name or student ID", placeholder="e.g. Adrian Santos or 2026124837", key="search_filter")
-        
+        with cohort_col:
+            valid_cohorts = sorted([str(c) for c in df_all["cohort"].dropna().unique().tolist() if str(c).strip()], key=get_cohort_val)
+            selected_cohort = st.selectbox("Filter by cohort", ["All"] + valid_cohorts, key="cohort_filter")
+        with adv_col:
+            valid_advisers = sorted([str(a) for a in df_all["adviser"].dropna().unique().tolist() if str(a).strip()])
+            current_user = st.session_state.user_info.get("full_name", "")
+            user_role = st.session_state.user_info.get("role", "")
+            
+            if "Advisor" in user_role or "Faculty" in user_role:
+                adv_view = st.selectbox("Adviser View", ["My Advisees", "All Students"], key="adv_view_toggle")
+                selected_adviser = current_user if adv_view == "My Advisees" else "All"
+            else:
+                default_idx = valid_advisers.index(current_user) + 1 if current_user in valid_advisers else 0
+                selected_adviser = st.selectbox("Filter by Adviser", ["All"] + valid_advisers, index=default_idx, key="adviser_filter")
         with sort_col: sort_option = st.selectbox("Sort by", ["Name", "Student ID", "Overall Status"], key="sort_filter")
 
         filtered = df_summary.copy()
@@ -3120,7 +1381,7 @@ def render_student_profile(df_all):
     st.divider()
     st.markdown("#### Program Lifecycle Summary")
 
-    milestones_df = fetch_student_lifecycle(student["student_number"], st.session_state.get("selected_term_id"))
+    milestones_df = fetch_student_milestones(student["student_number"])
     
     ce_updated = "N/A"
     cap_updated = "N/A"
@@ -3158,13 +1419,13 @@ def render_student_profile(df_all):
 
     with tab_courses:
         st.markdown("##### Enrolled Curriculum & Course Records")
-        courses_df = fetch_student_courses(student["student_number"], st.session_state.get("selected_term_id"))
+        courses_df = fetch_student_courses(student["student_number"])
         if not courses_df.empty: st.dataframe(courses_df, hide_index=True, use_container_width=True)
         else: st.info("No course enrollment records populated for this student.")
 
     with tab_milestones:
         st.markdown("##### Milestone Clearances")
-        milestones_df = fetch_student_lifecycle(student["student_number"], st.session_state.get("selected_term_id"))
+        milestones_df = fetch_student_milestones(student["student_number"])
         if not milestones_df.empty: st.dataframe(milestones_df, hide_index=True, use_container_width=True)
         else: st.info("No milestone events recorded in `student_lifecycle_status`.")
 
@@ -3252,124 +1513,29 @@ def render_student_profile(df_all):
                                 """),
                                 {"rem": new_remarks, "adv": adv_id, "sn": int(student["student_number"])}
                             )
-                            lifecycle_updates = [
-                                ("coursework", cw_val),
-                                ("comprehensive_exam", ce_val),
-                                ("capstone", cap_val)
-                            ]
-
-                            for stage_name, new_status_name in lifecycle_updates:
-                                lookup_sql = text("""
-                                    SELECT
-                                        stg.stage_id,
-                                        sts.status_id
-                                    FROM lifecycle_stage stg,
-                                         lifecycle_status sts
-                                    WHERE stg.stage_name = :stage_name
-                                      AND sts.status_name = :status_name;
-                                """)
-
-                                lookup_result = s.execute(
-                                    lookup_sql,
-                                    {
-                                        "stage_name": stage_name,
-                                        "status_name": new_status_name
-                                    }
-                                ).fetchone()
-
-                                if not lookup_result:
-                                    raise ValueError(
-                                        f"Invalid lifecycle status: {stage_name} → {new_status_name}"
-                                    )
-
-                                stage_id = lookup_result.stage_id
-                                new_status_id = lookup_result.status_id
-
-                                current_sql = text("""
-                                    SELECT
-                                        student_lifecycle_status_id,
-                                        status_id
-                                    FROM student_lifecycle_status
-                                    WHERE student_number = :sn
-                                      AND stage_id = :stage_id
-                                      AND term_id = :term_id;
-                                """)
-
-                                current_result = s.execute(current_sql, {"sn": int(student["student_number"]), "stage_id": stage_id, "term_id": st.session_state.get("selected_term_id")}).fetchone()
-
-                                if current_result:
-                                    lifecycle_status_id = current_result.student_lifecycle_status_id
-                                    previous_status_id = current_result.status_id
-
-                                    if previous_status_id != new_status_id:
-                                        history_sql = text("""
-                                            INSERT INTO lifecycle_status_history (
-                                                student_lifecycle_status_id,
-                                                previous_status_id,
-                                                new_status_id,
-                                                changed_by,
-                                                updated_date
-                                            )
-                                            VALUES (
-                                                :lifecycle_status_id,
-                                                :previous_status_id,
-                                                :new_status_id,
-                                                :changed_by,
-                                                NOW()
-                                            );
-                                        """)
-
-                                        s.execute(
-                                            history_sql,
-                                            {
-                                                "lifecycle_status_id": lifecycle_status_id,
-                                                "previous_status_id": previous_status_id,
-                                                "new_status_id": new_status_id,
-                                                "changed_by": user["user_id"]
-                                            }
-                                        )
-
-                                        update_sql = text("""
-                                            UPDATE student_lifecycle_status
-                                            SET
-                                                status_id = :new_status_id,
-                                                last_updated_date = NOW()
-                                            WHERE student_lifecycle_status_id = :lifecycle_status_id;
-                                        """)
-
-                                        s.execute(
-                                            update_sql,
-                                            {
-                                                "new_status_id": new_status_id,
-                                                "lifecycle_status_id": lifecycle_status_id
-                                            }
-                                        )
-
-                                else:
-                                    insert_current_sql = text("""
-                                        INSERT INTO student_lifecycle_status (
-                                            student_number,
-                                            stage_id,
-                                            status_id,
-                                            term_id,
-                                            last_updated_date
-                                        )
-                                        VALUES (
-                                            :sn,
-                                            :stage_id,
-                                            :new_status_id,
-                                            :term_id,
-                                            NOW()
-                                        );
-                                    """)
-
-                                    s.execute(insert_current_sql, {"sn": int(student["student_number"]), "stage_id": stage_id, "new_status_id": new_status_id, "term_id": st.session_state.get("selected_term_id")})
+                            
+                            upsert_sql = text("""
+                                INSERT INTO student_lifecycle_status (student_number, stage_id, status_id, last_updated_date)
+                                VALUES (
+                                    :sn, 
+                                    (SELECT stage_id FROM lifecycle_stage WHERE stage_name = :stage_name),
+                                    (SELECT status_id FROM lifecycle_status WHERE status_name = :status_name),
+                                    NOW()
+                                )
+                                ON CONFLICT (student_number, stage_id) 
+                                DO UPDATE SET status_id = EXCLUDED.status_id, last_updated_date = NOW();
+                            """)
+                            
+                            s.execute(upsert_sql, {"sn": int(student["student_number"]), "stage_name": "coursework", "status_name": cw_val})
+                            s.execute(upsert_sql, {"sn": int(student["student_number"]), "stage_name": "comprehensive_exam", "status_name": ce_val})
+                            s.execute(upsert_sql, {"sn": int(student["student_number"]), "stage_name": "capstone", "status_name": cap_val})
+                            
                             s.commit()
                         
                         log_security_event(user["user_id"], "STUDENT_RECORD_UPDATED", f"Modified record for Student ID {student['student_number']} (CW: {new_cw}, Exam: {new_ce}, Capstone: {new_cap}).")
                         st.success("Record successfully updated in Supabase!")
                         load_students.clear()
-                        fetch_student_lifecycle.clear()
+                        fetch_student_milestones.clear()
                         st.rerun()
                         
                     except Exception as err:
@@ -3401,16 +1567,9 @@ elif st.session_state.admin_view == "Schema Mapping Config":
     render_schema_mapping()
 elif st.session_state.admin_view == "Permissions & Audit Logs":
     render_permissions_and_logs()
-elif st.session_state.admin_view == "Academic Terms":
-    render_academic_terms()
-elif st.session_state.admin_view == "Add Data":
-    render_add_data()
 else:
     try:
-            df_all, last_sync = load_students(
-                ACTIVE_PROGRAM,
-                st.session_state.get("selected_term_id")
-            )
+            df_all, last_sync = load_students(ACTIVE_PROGRAM)
             st.session_state.consecutive_sync_failures = 0
             st.caption(f"🕒 **Data Last Synchronized:** `{last_sync}`")
             
