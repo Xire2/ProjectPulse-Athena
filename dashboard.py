@@ -509,13 +509,12 @@ def validate_import_dataframe(df, detected_columns, course_columns):
             "current_value": "Missing column",
             "severity": "Error",
             "message": "A student number column could not be detected.",
-            "row_index": None,
-            "type": "missing_column"
+            "row_index": None
         })
-        else:
-            for index, value in working_df[student_column].items():
-                if value is None or str(value).strip() == "":
-                    add_issue(index, student_column, "Error", "Student number is required.")
+    else:
+        for index, value in working_df[student_column].items():
+            if value is None or str(value).strip() == "":
+                add_issue(index, student_column, "Error", "Student number is required.")
 
     warning_fields = {
         "adviser": "Missing adviser.",
@@ -555,7 +554,12 @@ def validate_import_dataframe(df, detected_columns, course_columns):
             clean_value = str(value).strip().lower()
 
             if clean_value not in mapping:
-                add_issue(index, column, "Error", f"Unrecognized {field.replace('_', ' ')} status.")
+                add_issue(
+                    index,
+                    column,
+                    "Error",
+                    f"Unrecognized {field.replace('_', ' ')} status."
+                )
 
     return working_df, warnings, errors
 
