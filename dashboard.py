@@ -278,52 +278,74 @@ IMPORT_FIELD_ALIASES = {
     "remarks": ["remarks", "remark", "notes", "comments"]
 }
 
-COURSE_STATUS_MAP = {
-    "done": "done",
-    "completed": "done",
-    "complete": "done",
-    "passed": "done",
-    "in current load": "in current load",
-    "pending": "pending",
-    "cancelled": "cancelled",
-    "canceled": "cancelled",
-    "incomplete": "incomplete",
-    "not yet taken": "not yet taken",
-    "not yet done": "not yet done",
-    "n/a": None,
-    "na": None,
-    "": None
-}
+def normalize_import_value(value):
+    if value is None or pd.isna(value):
+        return None
+    value = str(value).strip()
+    return value if value else None
+def validate_import_dataframe(df, detected_columns, course_columns):
+    warnings = []
+    errors = []
+    working_df = df.copy()
+    working_df["__issue_cells"] = [[] for _ in range(len(working_df))]
 
-LIFECYCLE_STATUS_MAP = {
-    "coursework": {
-        "pending": "pending",
-        "completed": "done",
-        "done": "done",
-        "cancelled": "cancelled",
-        "canceled": "cancelled",
-        "incomplete": "incomplete",
-        "not yet taken": "not yet taken",
-        "in current load": "in current load"
-    },
-    "comprehensive_exam": {
-        "in-progress": "not yet taken",
-        "in progress": "not yet taken",
-        "passed": "done",
-        "done": "done",
-        "incomplete": "incomplete",
-        "not yet taken": "not yet taken"
-    },
-    "capstone": {
-        "in-progress": "not yet done",
-        "in progress": "not yet done",
-        "defended": "done",
-        "done": "done",
-        "incomplete": "incomplete",
-        "not yet done": "not yet done",
-        "not yet taken": "not yet taken"
+    def add_issue(row_index, column, severity, message):
+        issue = {
+            "row": int(row_index) + 2,
+            "student_number": str(working_df.iloc[row_index].get(detected_columns.get("student_number", ""), "")),
+            "column": str(column),
+            "current_value": working_df.iloc[row_index].get(column, ""),
+            "severity": severity,
+            "message": message,
+            "row_index": int(row_index)
+        }
+
+        if severity == "Error":
+            errors.append(issue)
+        else:
+            warnings.append(issue)
+
+        if column in working_df.columns:
+            working_df.at[row_index, "__issue_cells"].append(column)
+
+    student_column = detected_columns.get("student_number")
+
+    if not student_column:
+        errors.append({
+            "row": "—",
+            "student_number": "—",
+            "column": "Student Number",
+            "current_value": "Missing column",
+            "severity": "Error",
+            "message": "A student number column could not be detected.",
+            "row_index": None
+        })
+    else:
+        for index, value in working_df[student_column].items():
+            if value is None or str(value).strip() == "":
+                add_issue(index, student_column, "Error", "Student number is required.")
+
+    warning_fields = {
+        "adviser": "Missing adviser.",
+        "graduate_date_term_sy": "Missing graduation date/term.",
+        "capstone": "Missing capstone status.",
+        "student_email": "Missing student email.",
+        "cohort": "Missing cohort.",
+        "remarks": "Missing remarks."
     }
-}
+
+    for field, message in warning_fields.items():
+        column = detected_columns.get(field)
+
+        if not column:
+            continue
+
+        for index, value in working_df[column].items():
+            if value is None or str(value).strip() == "":
+                add_issue(index, column, "Warning", message)
+
+    return working_df, warnings, errors
+
 def normalize_import_header(value):
     if value is None or pd.isna(value):
         return ""
@@ -712,24 +734,6 @@ def render_add_data():
             except Exception as e:
                 st.error(str(e))
                 return
-                try:
-                    raw_df = clean_import_dataframe(read_import_file(uploaded_file))
-                    detected_columns = detect_import_columns(raw_df.columns)
-                    course_columns = detect_course_columns(raw_df.columns)
-                    validated_df, warnings, errors = validate_import_dataframe(raw_df, detected_columns, course_columns)
-
-                    st.session_state.import_loaded_file = uploaded_file.name
-                    st.session_state.import_preview_df = validated_df
-                    st.session_state.import_detected_columns = detected_columns
-                    st.session_state.import_course_columns = course_columns
-                    st.session_state.import_warnings = warnings
-                    st.session_state.import_errors = errors
-                    st.session_state.import_focus_row = None
-                    st.session_state.import_focus_column = None
-
-                except Exception as e:
-                    st.error(str(e))
-                    return
 
     else:
         if "import_manual_df" not in st.session_state:
@@ -982,10 +986,6 @@ def finalize_import_to_database():
                     cleaned_course_status = clean_value(row.get(course_column))
 
                     if cleaned_course_status is None:
-                        continue
-
-                    normalized_course_status = COURSE_STATUS_MAP.get(cleaned_course_status.lower())
-                    if normalized_course_status is None:
                         continue
 
                     course_exists = s.execute(
