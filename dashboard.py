@@ -553,6 +553,14 @@ def render_login_page():
     st.markdown(
         f"""
         <style>
+        /* Completely remove Streamlit's top header bar and decoration line */
+        header[data-testid="stHeader"] {{
+            display: none !important;
+        }}
+        div[data-testid="stDecoration"] {{
+            display: none !important;
+        }}
+
         /* 1. App Backgrounds */
         .stApp, .stApp > header, [data-testid="stAppViewContainer"] {{
             background-color: transparent !important;
@@ -596,12 +604,11 @@ def render_login_page():
             top: 0; left: 0; width: 100%; height: 100%;
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
-            background-color: rgba(0, 0, 0, 0.35); /* Darken the background globally to make text pop */
+            background-color: rgba(0, 0, 0, 0.35);
             z-index: 2;
         }}
         
-        /* --- NEW: BULLETPROOF TEXT SHADOWS --- */
-        /* Apply heavy text shadows to all text inside the login area so it remains visible */
+        /* Text Shadows */
         div[data-testid="stVerticalBlock"] p, 
         div[data-testid="stVerticalBlock"] label, 
         div[data-testid="stVerticalBlock"] h3,
@@ -611,7 +618,7 @@ def render_login_page():
             font-weight: 600 !important;
         }}
 
-        /* Login Button (Solid Red, White Text) */
+        /* Login Button */
         .stButton > button[kind="primary"] {{
             background-color: #b92b27 !important;
             color: #ffffff !important;
@@ -624,7 +631,6 @@ def render_login_page():
             background-color: #d1302b !important;
             border-color: #d1302b !important;
         }}
-        /* Remove the drop shadow from the button text so it looks clean */
         .stButton > button[kind="primary"] p {{
             text-shadow: none !important;
         }}
@@ -648,7 +654,6 @@ def render_login_page():
     _, col_mid, _ = st.columns([1, 1.2, 1])
     with col_mid:
         with st.container(border=True):
-            # Using inline HTML for the header guarantees the shadow applies regardless of Streamlit classes
             st.markdown("<h3 style='color: white; font-weight: bold; text-shadow: 2px 2px 4px rgba(0,0,0,0.9), 0px 0px 10px rgba(0,0,0,1.0); margin-bottom: 10px;'>Account Login</h3>", unsafe_allow_html=True)
             
             input_username = st.text_input("Username")
@@ -669,7 +674,17 @@ def render_login_page():
                 else:
                     log_security_event(None, "LOGIN_FAILURE", "Invalid credentials provided.")
                     st.error("Authentication failed: Invalid username or password.")
-            st.caption("Default seeds: `dean_exec`, `chair_mba`, `admin_sec` | **Advisers:** `asmith`, `bjones`, `cbrown`, `dprince` | **Password:** `Password123!` ")
+            
+            st.markdown(
+                """
+                <div style="font-size: 0.8rem; color: #ffffff; font-weight: 500; margin-top: 10px; line-height: 1.6; text-shadow: 1px 1px 3px rgba(0,0,0,0.9);">
+                    <b>Default seeds:</b> <code>dean_exec</code>, <code>chair_mba</code>, <code>admin_sec</code><br>
+                    <b>Advisers:</b> <code>asmith</code>, <code>bjones</code>, <code>cbrown</code>, <code>dprince</code><br>
+                    <b>Password:</b> <code>Password123!</code>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
 if not st.session_state.authenticated:
     render_login_page()
@@ -819,7 +834,7 @@ st.markdown(
 
 # --- SIDEBAR FOOTER: Re-sync & Log Out ---
 # Balanced spacer to sit gracefully near the bottom
-st.sidebar.markdown('<div style="height: 9vh;"></div>', unsafe_allow_html=True)
+st.sidebar.markdown('<div style="height: 15vh;"></div>', unsafe_allow_html=True)
 
 st.sidebar.markdown("---")
 
