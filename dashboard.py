@@ -367,24 +367,44 @@ def read_import_file(uploaded_file):
         file_name = uploaded_file.name.lower()
 
         if file_name.endswith(".csv"):
-            return pd.read_csv(uploaded_file, dtype=object)
+            raw = pd.read_csv(uploaded_file, header=None, dtype=object)
+        elif file_name.endswith(".xlsx") or file_name.endswith(".xls"):
+            raw = pd.read_excel(uploaded_file, header=None, dtype=object)
+        else:
+            raise ValueError("Only CSV and Excel files are supported.")
 
-        if file_name.endswith(".xlsx") or file_name.endswith(".xls"):
-            return pd.read_excel(uploaded_file, dtype=object)
-
-        raise ValueError("Only CSV and Excel files are supported.")
+        return raw
 
     except Exception as e:
         raise ValueError(f"Could not read the uploaded file: {e}")
 
 def clean_import_dataframe(df):
     df = df.copy()
-    df.columns = [str(column).strip() if str(column).strip() else f"Unnamed Column {index + 1}" for index, column in enumerate(df.columns)]
     df = df.dropna(how="all").reset_index(drop=True)
 
     for column in df.columns:
         df[column] = df[column].apply(lambda value: None if pd.isna(value) or str(value).strip().lower() in ("nan", "none") else value)
+    if len(df) >= 2:
+        row1 = df.iloc[0].tolist()
+        row2 = df.iloc[1].tolist()
+        row1_matches = sum(normalize_import_header(value) in {normalize_import_header(alias) for aliases in IMPORT_FIELD_ALIASES.values() for alias in aliases} for value in row1)
+        row2_matches = sum(normalize_import_header(value) in {normalize_import_header(alias) for aliases in IMPORT_FIELD_ALIASES.values() for alias in aliases} for value in row2)
+        if row2_matches > row1_matches:
+            headers = []
+            for index, (upper, lower) in enumerate(zip(row1, row2)):
+                upper = normalize_import_header(upper)
+                lower = normalize_import_header(lower)
+                if lower:
+                    headers.append(str(row2[index]).strip())
+                elif upper:
+                    headers.append(str(row1[index]).strip())
+                else:
+                    headers.append(f"Unnamed Column {index + 1}")
 
+            df = df.iloc[2:].reset_index(drop=True)
+            df.columns = headers
+            return df
+    df.columns = [str(column).strip() if str(column).strip() else f"Unnamed Column {index + 1}" for index, column in enumerate(df.columns)]
     return df
 
 def get_issue_cell_style():
