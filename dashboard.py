@@ -385,25 +385,34 @@ def clean_import_dataframe(df):
     for column in df.columns:
         df[column] = df[column].apply(lambda value: None if pd.isna(value) or str(value).strip().lower() in ("nan", "none") else value)
     if len(df) >= 2:
-        row1 = df.iloc[0].tolist()
-        row2 = df.iloc[1].tolist()
-        row1_matches = sum(normalize_import_header(value) in {normalize_import_header(alias) for aliases in IMPORT_FIELD_ALIASES.values() for alias in aliases} for value in row1)
-        row2_matches = sum(normalize_import_header(value) in {normalize_import_header(alias) for aliases in IMPORT_FIELD_ALIASES.values() for alias in aliases} for value in row2)
-        if row2_matches > row1_matches:
-            headers = []
-            for index, (upper, lower) in enumerate(zip(row1, row2)):
-                upper = normalize_import_header(upper)
-                lower = normalize_import_header(lower)
-                if lower:
-                    headers.append(str(row2[index]).strip())
-                elif upper:
-                    headers.append(str(row1[index]).strip())
-                else:
-                    headers.append(f"Unnamed Column {index + 1}")
+    row1 = df.iloc[0].tolist()
+    row2 = df.iloc[1].tolist()
+    aliases = {normalize_import_header(alias) for values in IMPORT_FIELD_ALIASES.values() for alias in values}
 
-            df = df.iloc[2:].reset_index(drop=True)
-            df.columns = headers
-            return df
+    row1_matches = sum(normalize_import_header(value) in aliases for value in row1)
+    row2_matches = sum(normalize_import_header(value) in aliases for value in row2)
+
+    if row1_matches > 0 or row2_matches > 0:
+        headers = []
+
+        for index, (upper, lower) in enumerate(zip(row1, row2)):
+            upper = "" if pd.isna(upper) else str(upper).strip()
+            lower = "" if pd.isna(lower) else str(lower).strip()
+
+            if normalize_import_header(lower) in aliases:
+                headers.append(lower)
+            elif normalize_import_header(upper) in aliases:
+                headers.append(upper)
+            elif lower:
+                headers.append(lower)
+            elif upper:
+                headers.append(upper)
+            else:
+                headers.append(f"Unnamed Column {index + 1}")
+
+        df = df.iloc[2:].reset_index(drop=True)
+        df.columns = headers
+        return df
     df.columns = [str(column).strip() if str(column).strip() else f"Unnamed Column {index + 1}" for index, column in enumerate(df.columns)]
     return df
 
