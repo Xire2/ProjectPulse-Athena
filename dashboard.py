@@ -638,10 +638,30 @@ def render_add_data():
     import_method = st.radio("Add Data Method", ["Import File", "Manual Data Entry"], horizontal=True, key="import_method")
 
     if import_method == "Import File":
-        uploaded_file = st.file_uploader("Upload CSV or Excel file", type=["csv", "xlsx", "xls"], key="student_import_file")
+    uploaded_file = st.file_uploader("Upload CSV or Excel file", type=["csv", "xlsx", "xls"], key="student_import_file")
 
-        if uploaded_file is not None:
-            if st.session_state.get("import_loaded_file") != uploaded_file.name:
+    if uploaded_file is None:
+        for key in ["import_loaded_file", "import_preview_df", "import_detected_columns", "import_course_columns", "import_warnings", "import_errors", "import_focus_row", "import_focus_column"]:
+            st.session_state.pop(key, None)
+    elif st.session_state.get("import_loaded_file") != uploaded_file.name:
+        try:
+            raw_df = clean_import_dataframe(read_import_file(uploaded_file))
+            detected_columns = detect_import_columns(raw_df.columns)
+            course_columns = detect_course_columns(raw_df.columns)
+            validated_df, warnings, errors = validate_import_dataframe(raw_df, detected_columns, course_columns)
+
+            st.session_state.import_loaded_file = uploaded_file.name
+            st.session_state.import_preview_df = validated_df
+            st.session_state.import_detected_columns = detected_columns
+            st.session_state.import_course_columns = course_columns
+            st.session_state.import_warnings = warnings
+            st.session_state.import_errors = errors
+            st.session_state.import_focus_row = None
+            st.session_state.import_focus_column = None
+
+        except Exception as e:
+            st.error(str(e))
+            return
                 try:
                     raw_df = clean_import_dataframe(read_import_file(uploaded_file))
                     detected_columns = detect_import_columns(raw_df.columns)
