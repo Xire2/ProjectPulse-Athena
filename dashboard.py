@@ -70,13 +70,29 @@ div[data-testid="stMetricValue"] div {
 
 div[data-testid="stPlotlyChart"],
 div[data-testid="stPlotlyChart"] > div,
-div[data-testid="stPlotlyChart"] iframe {
-    width: 100% !important;
-    max-width: 100% !important;
-    min-width: 0 !important;
-    overflow: hidden !important;
+div[data-testid="stPlotlyChart"] .js-plotly-plot,
+div[data-testid="stPlotlyChart"] .plot-container,
+div[data-testid="stPlotlyChart"] .svg-container {
+   width: 100% !important;
+   max-width: 100% !important;
+   min-width: 0 !important;
+   overflow: hidden !important;
 }
+@media (min-width: 769px) and (max-width: 1100px) {
+   div[data-testid="stPlotlyChart"] {
+      min-width: 0 !important;
+      width: 100% !important;
+      max-width: 100% !important;
+   }
 
+   div[data-testid="stPlotlyChart"] .js-plotly-plot,
+   div[data-testid="stPlotlyChart"] .plot-container,
+   div[data-testid="stPlotlyChart"] .svg-container {
+      min-width: 0 !important;
+      width: 100% !important;
+      max-width: 100% !important;
+   }
+}
 div[data-testid="stVerticalBlockBorderWrapper"] {
     min-width: 0 !important;
     max-width: 100% !important;
