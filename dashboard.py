@@ -678,24 +678,20 @@ def render_add_data():
     summary_col3.metric("Warnings", len(st.session_state.get("import_warnings", [])))
     summary_col4.metric("Errors", len(st.session_state.get("import_errors", [])))
 
-    st.markdown("### Data Preview & Editor")
+     st.markdown("### Data Preview & Editor")
 
-    focus_row = st.session_state.get("import_focus_row")
-    focus_column = st.session_state.get("import_focus_column")
-
-    grid_options = get_import_grid_options(focus_row, focus_column)
-
-    grid_result = AgGrid(preview_df, editable=True, fit_columns_on_grid_load=False, height=450, theme="streamlit", key="import_main_datasheet")
-
-    edited_df = grid_result["data"]
-
-    if edited_df is not None:
-        edited_df = edited_df.copy()
-
-        if "__issue_cells" not in edited_df.columns:
-            edited_df["__issue_cells"] = [[] for _ in range(len(edited_df))]
-
-        st.session_state.import_preview_df = edited_df
+    display_df = preview_df.drop(columns=["__issue_cells"], errors="ignore")
+    
+    edited_df = st.data_editor(
+        display_df,
+        use_container_width=True,
+        height=450,
+        num_rows="fixed",
+        key="import_main_datasheet"
+    )
+    
+    edited_df["__issue_cells"] = preview_df.get("__issue_cells", pd.Series([[] for _ in range(len(edited_df))])).values
+    st.session_state.import_preview_df = edited_df   
 
     st.caption("You may edit any cell. Highlighted cells correspond to detected warnings or errors.")
 
