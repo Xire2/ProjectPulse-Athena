@@ -1388,7 +1388,6 @@ if not st.session_state.authenticated:
 # AUTHENTICATED USER HEADER & NAVIGATION
 # ------------------------------------------------------------------
 user = st.session_state.user_info
-st.sidebar.write("DEBUG can_import:", user.get("can_import"))
 # Use columns [1, 2, 1] to make the center column exactly 50% width
 logo_left, logo_center, logo_right = st.sidebar.columns([1, 6, 1])
 with logo_center:
