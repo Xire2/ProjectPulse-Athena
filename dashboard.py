@@ -685,16 +685,7 @@ def render_add_data():
 
     grid_options = get_import_grid_options(focus_row, focus_column)
 
-    grid_result = AgGrid(
-        preview_df,
-        gridOptions=grid_options,
-        update_mode=GridUpdateMode.VALUE_CHANGED,
-        allow_unsafe_jscode=True,
-        fit_columns_on_grid_load=False,
-        height=450,
-        theme="streamlit",
-        key="import_main_datasheet"
-    )
+    grid_result = AgGrid(preview_df, editable=True, fit_columns_on_grid_load=False, height=450, theme="streamlit", key="import_main_datasheet")
 
     edited_df = grid_result["data"]
 
