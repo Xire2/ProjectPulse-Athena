@@ -875,13 +875,13 @@ def render_student_list(df_all):
 
     # Helper function to reuse the exact same grid layout across multiple pages
     def render_roster_grid(display_df, key_prefix):
-    col_widths = [0.9, 1.5, 0.8, 1.5, 1.2, 1.2, 1.4, 0.9, 0.9, 0.8]
-
-    header_labels = [
-        "STUDENT ID", "NAME", "COHORT", "ADVISER",
-        "COURSEWORK", "COMP EXAM", "CAPSTONE",
-        "LAST UPDATE", "RISK", "ACTION"
-    ]
+        col_widths = [0.9, 1.5, 0.8, 1.5, 1.2, 1.2, 1.4, 0.9, 0.9, 0.8]
+    
+        header_labels = [
+            "STUDENT ID", "NAME", "COHORT", "ADVISER",
+            "COURSEWORK", "COMP EXAM", "CAPSTONE",
+            "LAST UPDATE", "RISK", "ACTION"
+        ]
 
     header_cols = st.columns(col_widths, vertical_alignment="center")
 
