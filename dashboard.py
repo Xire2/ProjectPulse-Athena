@@ -626,12 +626,6 @@ def render_add_data():
                 raw_df = clean_import_dataframe(read_import_file(uploaded_file))
                 detected_columns = detect_import_columns(raw_df.columns)
                 course_columns = detect_course_columns(raw_df.columns)
-                
-                st.write("DEBUG STATUS VALUES:")
-                for column in ["coursework status", "COMPREHENSIVE EXAM", "CAPSTONE"]:
-                    if column in raw_df.columns:
-                        st.write(column, sorted(raw_df[column].dropna().astype(str).str.strip().str.lower().unique().tolist()))
-
                 validated_df, warnings, errors = validate_import_dataframe(raw_df, detected_columns, course_columns)
     
                 st.session_state.import_loaded_file = uploaded_file.name
