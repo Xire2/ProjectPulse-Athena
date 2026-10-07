@@ -283,68 +283,6 @@ def normalize_import_value(value):
         return None
     value = str(value).strip()
     return value if value else None
-def validate_import_dataframe(df, detected_columns, course_columns):
-    warnings = []
-    errors = []
-    working_df = df.copy()
-    working_df["__issue_cells"] = [[] for _ in range(len(working_df))]
-
-    def add_issue(row_index, column, severity, message):
-        issue = {
-            "row": int(row_index) + 2,
-            "student_number": str(working_df.iloc[row_index].get(detected_columns.get("student_number", ""), "")),
-            "column": str(column),
-            "current_value": working_df.iloc[row_index].get(column, ""),
-            "severity": severity,
-            "message": message,
-            "row_index": int(row_index)
-        }
-
-        if severity == "Error":
-            errors.append(issue)
-        else:
-            warnings.append(issue)
-
-        if column in working_df.columns:
-            working_df.at[row_index, "__issue_cells"].append(column)
-
-    student_column = detected_columns.get("student_number")
-
-    if not student_column:
-        errors.append({
-            "row": "—",
-            "student_number": "—",
-            "column": "Student Number",
-            "current_value": "Missing column",
-            "severity": "Error",
-            "message": "A student number column could not be detected.",
-            "row_index": None
-        })
-    else:
-        for index, value in working_df[student_column].items():
-            if value is None or str(value).strip() == "":
-                add_issue(index, student_column, "Error", "Student number is required.")
-
-    warning_fields = {
-        "adviser": "Missing adviser.",
-        "graduate_date_term_sy": "Missing graduation date/term.",
-        "capstone": "Missing capstone status.",
-        "student_email": "Missing student email.",
-        "cohort": "Missing cohort.",
-        "remarks": "Missing remarks."
-    }
-
-    for field, message in warning_fields.items():
-        column = detected_columns.get(field)
-
-        if not column:
-            continue
-
-        for index, value in working_df[column].items():
-            if value is None or str(value).strip() == "":
-                add_issue(index, column, "Warning", message)
-
-    return working_df, warnings, errors
 
 def normalize_import_header(value):
     if value is None or pd.isna(value):
@@ -581,32 +519,6 @@ def validate_import_dataframe(df, detected_columns, course_columns):
         for index, value in working_df[column].items():
             if value is None or str(value).strip() == "":
                 add_issue(index, column, "Warning", message)
-
-    status_fields = {
-        "coursework_status": COURSE_STATUS_MAP,
-        "comprehensive_exam": LIFECYCLE_STATUS_MAP["comprehensive_exam"],
-        "capstone": LIFECYCLE_STATUS_MAP["capstone"]
-    }
-
-    for field, mapping in status_fields.items():
-        column = detected_columns.get(field)
-
-        if not column:
-            continue
-
-        for index, value in working_df[column].items():
-            if value is None or str(value).strip() == "":
-                continue
-
-            clean_value = str(value).strip().lower()
-
-            if clean_value not in mapping:
-                add_issue(
-                    index,
-                    column,
-                    "Error",
-                    f"Unrecognized {field.replace('_', ' ')} status."
-                )
 
     return working_df, warnings, errors
 
