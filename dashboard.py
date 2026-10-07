@@ -1706,26 +1706,74 @@ def render_permissions_and_logs():
     t_perms, t_logs, t_syslogs = st.tabs(["User Permissions", "Live Audit Logs", "System Sync Failures"])
     
     with t_perms:
-        users_df = conn.query("SELECT user_id, username, full_name, role, can_edit, can_import FROM app_users ORDER BY user_id;", ttl=0)
-        st.dataframe(users_df, hide_index=True, use_container_width=True)
+        users_df = conn.query(
+            "SELECT user_id, username, full_name, role, can_edit, can_import FROM app_users ORDER BY user_id;",
+            ttl=0
+        )
 
-st.markdown("##### ✏️ Modify User Permissions")
-with st.form("admin_perm_form"):
-    target_username = st.selectbox("Select User Account", users_df["username"].tolist())
-    target_user_row = users_df[users_df["username"] == target_username].iloc[0]
-    new_can_edit = st.checkbox("Grant Write / Edit Capability", value=bool(target_user_row["can_edit"]))
-    new_can_import = st.checkbox("Grant Add Data / Import Capability", value=bool(target_user_row["can_import"]))
+        st.dataframe(
+            users_df,
+            hide_index=True,
+            use_container_width=True
+        )
 
-    if st.form_submit_button("Update Access Level"):
+        st.markdown("##### ✏️ Modify User Permissions")
+
+        with st.form("admin_perm_form"):
+            target_username = st.selectbox(
+                "Select User Account",
+                users_df["username"].tolist()
+            )
+
+            target_user_row = users_df[
+                users_df["username"] == target_username
+            ].iloc[0]
+
+            new_can_edit = st.checkbox(
+                "Grant Write / Edit Capability",
+                value=bool(target_user_row["can_edit"])
+            )
+
+            new_can_import = st.checkbox(
+                "Grant Add Data / Import Capability",
+                value=bool(target_user_row["can_import"])
+            )
+
+            if st.form_submit_button("Update Access Level"):
                 try:
                     with conn.session as s:
-                        s.execute(text("UPDATE app_users SET can_edit = :ce, can_import = :ci WHERE username = :u;"), {"ce": new_can_edit, "ci": new_can_import, "u": target_username})
+                        s.execute(
+                            text("""
+                                UPDATE app_users
+                                SET
+                                    can_edit = :ce,
+                                    can_import = :ci
+                                WHERE username = :u;
+                            """),
+                            {
+                                "ce": new_can_edit,
+                                "ci": new_can_import,
+                                "u": target_username
+                            }
+                        )
                         s.commit()
-                    log_security_event(user["user_id"], "PERMISSIONS_UPDATED", f"Updated can_edit={new_can_edit}, can_import={new_can_import} for user '{target_username}'.")
-                    st.success(f"Permissions successfully updated for {target_username}.")
+
+                    log_security_event(
+                        user["user_id"],
+                        "PERMISSIONS_UPDATED",
+                        f"Updated can_edit={new_can_edit}, can_import={new_can_import} for user '{target_username}'."
+                    )
+
+                    st.success(
+                        f"Permissions successfully updated for {target_username}."
+                    )
+
                     st.rerun()
+
                 except Exception as ex:
-                    st.error(f"Error updating permissions: {ex}")
+                    st.error(
+                        f"Error updating permissions: {ex}"
+                    )
 
     with t_logs:
         with t_logs:
