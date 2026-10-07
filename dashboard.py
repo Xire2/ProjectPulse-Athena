@@ -734,7 +734,6 @@ def render_add_data():
 
         if st.button("Finalize Import", type="primary", use_container_width=True, disabled=finalize_disabled):
             finalize_import_to_database()
-```
 def finalize_import_to_database():
     preview_df = st.session_state.get("import_preview_df")
     if preview_df is None or preview_df.empty:
