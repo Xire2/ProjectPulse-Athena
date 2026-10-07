@@ -763,7 +763,7 @@ def render_instance_settings():
     with st.form("thresholds_form"):
         c1, c2, c3 = st.columns(3)
         new_cw = c1.number_input("Coursework Limit (Days)", value=cur_cw, min_value=1, help="Expected duration to clear core classes.")
-        new_ce = c2.number_input("Comp Exam Limit (Days)", value=cur_ce, min_value=1, help="Expected duration to pass the exam once initiated.")
+        new_ce = c2.number_input("Comprehensive Exam Limit (Days)", value=cur_ce, min_value=1, help="Expected duration to pass the exam once initiated.")
         new_cap = c3.number_input("Capstone Limit (Days)", value=cur_cap, min_value=1, help="Expected duration to defend capstone once started.")
         
         if st.form_submit_button("Save Program Thresholds"):
@@ -1069,7 +1069,7 @@ def create_executive_dashboard_pdf(df_summary, summary_label, last_sync):
         [
             "TOTAL STUDENTS",
             "COURSEWORK",
-            "COMP EXAM",
+            "COMPREHENSIVE EXAM",
             "CAPSTONES",
             "ON-TIME GRAD",
             "COMPLETION",
@@ -1350,7 +1350,7 @@ def render_student_list(df_all):
             div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(3)::before { content: "COHORT"; }
             div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(4)::before { content: "ADVISER"; }
             div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(5)::before { content: "COURSEWORK"; }
-            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(6)::before { content: "COMP EXAM"; }
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(6)::before { content: "COMPREHENSIVE EXAM"; }
             div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(7)::before { content: "CAPSTONE"; }
             div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(8)::before { content: "LAST UPDATE"; }
             div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(9)::before { content: "RISK"; }
@@ -1398,7 +1398,7 @@ def render_student_list(df_all):
     # Helper function to reuse the exact same grid layout across multiple pages
     def render_roster_grid(display_df, key_prefix):
         col_widths = [0.9, 1.5, 0.8, 1.5, 1.2, 1.2, 1.4, 0.9, 0.9, 0.8]
-        header_labels = ["STUDENT ID", "NAME", "COHORT", "ADVISER", "COURSEWORK", "COMP EXAM", "CAPSTONE", "LAST UPDATE", "RISK", "ACTION"]
+        header_labels = ["STUDENT ID", "NAME", "COHORT", "ADVISER", "COURSEWORK", "COMPREHENSIVE EXAM", "CAPSTONE", "LAST UPDATE", "RISK", "ACTION"]
     
         with st.container():
             st.markdown('<span class="roster-scroll-marker"></span>', unsafe_allow_html=True)
