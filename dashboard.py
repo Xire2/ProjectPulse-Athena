@@ -440,14 +440,23 @@ if "table_key_counter" not in st.session_state: st.session_state.table_key_count
 if "chart_key_counter" not in st.session_state: st.session_state.chart_key_counter = 0
 if "drill_stage" not in st.session_state: st.session_state.drill_stage = None
 
+if "previous_view" not in st.session_state: 
+    st.session_state.previous_view = "Executive Dashboard"
+
 def go_to_profile(student_email=None):
     if student_email:
         st.session_state.selected_student_email = student_email
+    
+    # Remember the current page before switching to the profile
+    if st.session_state.admin_view != "Student Profile Inspector":
+        st.session_state.previous_view = st.session_state.admin_view
+        
     st.session_state.admin_view = "Student Profile Inspector"
     st.session_state.page = "profile"
 
 def go_to_list():
-    st.session_state.admin_view = "Student Roster"
+    # Return to whatever page was saved in previous_view
+    st.session_state.admin_view = st.session_state.get("previous_view", "Executive Dashboard")
     st.session_state.page = "list"
     st.session_state.selected_student_email = None
     st.session_state.table_key_counter += 1
@@ -724,7 +733,7 @@ def render_instance_settings():
     with st.form("thresholds_form"):
         c1, c2, c3 = st.columns(3)
         new_cw = c1.number_input("Coursework Limit (Days)", value=cur_cw, min_value=1, help="Expected duration to clear core classes.")
-        new_ce = c2.number_input("Comp Exam Limit (Days)", value=cur_ce, min_value=1, help="Expected duration to pass the exam once initiated.")
+        new_ce = c2.number_input("Comprehensive Exam Limit (Days)", value=cur_ce, min_value=1, help="Expected duration to pass the exam once initiated.")
         new_cap = c3.number_input("Capstone Limit (Days)", value=cur_cap, min_value=1, help="Expected duration to defend capstone once started.")
         
         if st.form_submit_button("Save Program Thresholds"):
@@ -886,15 +895,44 @@ def render_permissions_and_logs():
 
 def render_completion_trend_chart(df_all, active_program):
     if df_all.empty:
-        st.info("No data available to display completion trends.")
+        st.info("No data available to display trends.")
         return
-    df_all['is_completed'] = df_all['coursework_display'] == 'Completed'
-    trend_df = df_all.groupby('cohort').agg(
-        total_students=('coursework_display', 'count'),
-        completed_students=('is_completed', 'sum')
+        
+    # Split the top area: Left for the title, Right for the dropdown
+    header_col, select_col = st.columns([2.5, 1.5], vertical_alignment="center")
+    
+    with header_col:
+        st.subheader("Cohort Performance Trends", help="Toggle between Overall Completion and On-Time Graduation rates over the last 4 terms.")
+        
+    with select_col:
+        metric_choice = st.selectbox(
+            "Select Trend Metric",
+            options=["Overall Completion", "On-Time Grad Rate"],
+            label_visibility="collapsed"
+        )
+    
+    df_calc = df_all.copy()
+
+    # Route logic based on the dropdown choice
+    if metric_choice == "Overall Completion":
+        df_calc['is_success'] = (
+            (df_calc['coursework_display'] == 'Completed') & 
+            (df_calc['comprehensive_exam_display'] == 'Passed') & 
+            (df_calc['capstone_display'] == 'Defended')
+        )
+        y_label = "Completion Rate (%)"
+    else:
+        valid_grad = df_calc['graduate_on_time'].astype(str).str.strip().str.lower()
+        df_calc['is_success'] = valid_grad.isin(["yes", "y", "true", "1"])
+        y_label = "On-Time Grad Rate (%)"
+        
+    # Group by cohort and calculate the rate
+    trend_df = df_calc.groupby('cohort').agg(
+        total_students=('student_number', 'count'),
+        success_students=('is_success', 'sum')
     ).reset_index()
     
-    trend_df['completion_rate'] = (trend_df['completed_students'] / trend_df['total_students']) * 100
+    trend_df['rate'] = (trend_df['success_students'] / trend_df['total_students']) * 100
     trend_df['sort_year'] = trend_df['cohort'].astype(str).str.extract(r'[TQ](\d{2})').astype(float)
     trend_df['sort_term'] = trend_df['cohort'].astype(str).str.extract(r'^(\d)[TQ]').astype(float)
     
@@ -905,32 +943,30 @@ def render_completion_trend_chart(df_all, active_program):
         return
 
     fig = px.line(
-        trend_df, x="cohort", y="completion_rate", markers=True,
-        text="completion_rate", # Binds the data values to text labels
-        labels={"cohort": "Academic Term", "completion_rate": "Completion Rate (%)"}
+        trend_df, x="cohort", y="rate", markers=True,
+        text="rate", 
+        labels={"cohort": "Academic Term", "rate": y_label}
     )
     
     fig.update_layout(
-        height=377, # Explicitly matched height
-        yaxis_title="Completion Rate (%)",
-        xaxis_title="Academic Term",
+        height=320, 
+        yaxis_title=y_label,
+        xaxis_title="", 
         yaxis=dict(range=[-5, 115], fixedrange=True), 
         xaxis=dict(fixedrange=True), 
         hovermode="x unified",
-        margin=dict(l=10, r=10, t=30, b=10)
+        margin=dict(l=10, r=10, t=20, b=10) 
     )
     
-    # Format the labels as 1-decimal percentages and place them above the markers
     fig.update_traces(
-        line_color="#D50000", # Program palette red for the trend line
-        marker=dict(color="#FFAE00", size=8), # Program palette yellow for the dots
+        line_color="#D50000", 
+        marker=dict(color="#FFAE00", size=8), 
         line_width=3, 
         texttemplate='%{text:.1f}%', 
         textposition='top center',
         textfont=dict(size=12, color="var(--text-color)")
     )
     
-    st.subheader(f"Completion Trend — Last 4 Terms", help="Shows the percentage of students in each cohort who have successfully completed all core coursework.")
     st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
 # ------------------------------------------------------------------
@@ -941,17 +977,30 @@ def render_student_list(df_all):
     st.markdown(
         """
         <style>
-        .roster-th { font-size: 0.85rem; font-weight: 700; color: #666; text-transform: uppercase; }
+        .roster-th { font-size: 0.85rem; font-weight: 700; color: #666; text-transform: uppercase; word-break: normal !important; overflow-wrap: normal !important; }
         .roster-th-divider { border-bottom: 2px solid #ddd; margin: 0.5rem 0 1rem 0; }
         .roster-row-divider { border-bottom: 1px solid #eee; margin: 0.5rem 0; }
-        .roster-cell-text, .roster-cell-id { font-size: 0.9rem; color: var(--text-color); overflow-wrap: anywhere; word-break: break-word; }
+        .roster-cell-text, .roster-cell-id { font-size: 0.9rem; color: var(--text-color); word-break: normal !important; overflow-wrap: normal !important; }
     
         .status-pill { background-color: #f0f2f6; padding: 4px 8px; border-radius: 12px; font-size: 0.8rem; color: #31333F !important; font-weight: 600; }
         .sr-risk-pill { background-color: #D500001A; color: #D50000; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
         .sr-risk-none { background-color: #0080001A; color: #008000; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
     
-        .roster-row-marker, .roster-header-marker {
+        .roster-row-marker, .roster-header-marker, .roster-scroll-area {
             display: none !important;
+        }
+        
+        /* Force minimum width on grid to prevent text overlapping */
+        div[data-testid="stHorizontalBlock"]:has(.roster-header-marker),
+        div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) {
+            min-width: 1100px !important;
+            flex-wrap: nowrap !important;
+        }
+
+        /* Guarantee horizontal scrolling ONLY on the specific table container, not the whole page */
+        div[data-testid="stVerticalBlock"]:has(.roster-scroll-area):not(:has(div[data-testid="stVerticalBlock"]:has(.roster-scroll-area))) {
+            overflow-x: auto !important;
+            padding-bottom: 15px;
         }
     
         div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) {
@@ -968,6 +1017,13 @@ def render_student_list(df_all):
             white-space: normal !important;
             line-height: 1.2 !important;
             text-align: center !important;
+            word-break: keep-all !important;
+            overflow-wrap: normal !important;
+        }
+
+        div[data-testid="stButton"] button {
+            padding-left: 4px !important;
+            padding-right: 4px !important;
         }
     
         @media (max-width: 1100px) {
@@ -990,6 +1046,7 @@ def render_student_list(df_all):
                 border: 1px solid var(--secondary-background-color) !important;
                 border-left: 4px solid transparent !important;
                 background-color: var(--background-color) !important;
+                min-width: 0 !important; /* Reset minimum width for mobile layout */
             }
     
             div[data-testid="stHorizontalBlock"]:has(.roster-row-marker):has(.sr-risk-pill) {
@@ -1057,87 +1114,95 @@ def render_student_list(df_all):
         col_widths = [0.9, 1.5, 0.8, 1.5, 1.2, 1.2, 1.4, 0.9, 0.9, 0.8]
         header_labels = ["STUDENT ID", "NAME", "COHORT", "ADVISER", "COURSEWORK", "COMP EXAM", "CAPSTONE", "LAST UPDATE", "RISK", "ACTION"]
     
-        header_cols = st.columns(col_widths, vertical_alignment="center")
-        header_cols[0].markdown('<span class="roster-header-marker"></span>', unsafe_allow_html=True)
+        scroll_kwargs = {"height": 600} if len(display_df) > 10 else {}
+        
+        # --- HEADERS MOVED INSIDE THE SCROLL CONTAINER ---
+        with st.container(border=False, key=f"{key_prefix}_scroll", **scroll_kwargs):
+            st.markdown('<div class="roster-scroll-area"></div>', unsafe_allow_html=True)
+            
+            header_cols = st.columns(col_widths, vertical_alignment="center")
+            
+            # Combine the hidden header marker and the first label into a single markdown call
+            header_cols[0].markdown(f'<span class="roster-header-marker"></span><div class="roster-th">{header_labels[0]}</div>', unsafe_allow_html=True)
+            
+            # Render the rest of the headers normally
+            for col, label in zip(header_cols[1:], header_labels[1:]):
+                col.markdown(f'<div class="roster-th">{label}</div>', unsafe_allow_html=True)
+        
+            st.markdown('<div class="roster-th-divider"></div>', unsafe_allow_html=True)
     
-        for col, label in zip(header_cols, header_labels):
-            col.markdown(f'<div class="roster-th">{label}</div>', unsafe_allow_html=True)
-    
-        st.markdown('<div class="roster-th-divider"></div>', unsafe_allow_html=True)
-    
-        for _, row in display_df.iterrows():
-            is_at_risk = str(row.get("Risk Status", "")).strip() == "Flagged"
-    
-            r_cols = st.columns(col_widths, vertical_alignment="center")
-    
-            r_cols[0].markdown('<span class="roster-row-marker"></span>', unsafe_allow_html=True)
-    
-            r_cols[0].markdown(
-                f'<span class="roster-cell-id">{row.get("Student ID", "")}</span>',
-                unsafe_allow_html=True
-            )
-    
-            r_cols[1].markdown(
-                f'<span class="roster-cell-text">{row.get("Name", "")}</span>',
-                unsafe_allow_html=True
-            )
-    
-            r_cols[2].markdown(
-                f'<span class="roster-cell-text">{row.get("Cohort", "")}</span>',
-                unsafe_allow_html=True
-            )
-    
-            r_cols[3].markdown(
-                f'<span class="roster-cell-text">{row.get("Adviser", "")}</span>',
-                unsafe_allow_html=True
-            )
-    
-            r_cols[4].markdown(
-                get_stage_badge("coursework", row.get("Coursework", "")),
-                unsafe_allow_html=True
-            )
-    
-            r_cols[5].markdown(
-                get_stage_badge("comprehensive_exam", row.get("Comprehensive Exam", "")),
-                unsafe_allow_html=True
-            )
-    
-            r_cols[6].markdown(
-                get_stage_badge("capstone", row.get("Capstone", "")),
-                unsafe_allow_html=True
-            )
-    
-            last_upd = row.get("Last Update", "")
-            display_date = last_upd if str(last_upd).strip() != "N/A" else "—"
-    
-            r_cols[7].markdown(
-                f'<span class="roster-cell-text">{display_date}</span>',
-                unsafe_allow_html=True
-            )
-    
-            risk_status = str(row.get("Risk Status", "")).strip()
-    
-            if risk_status == "Flagged":
-                r_cols[8].markdown(
-                    '<span class="sr-risk-pill">AT RISK</span>',
+            for _, row in display_df.iterrows():
+                is_at_risk = str(row.get("Risk Status", "")).strip() == "Flagged"
+        
+                r_cols = st.columns(col_widths, vertical_alignment="center")
+        
+                # Combine the hidden row marker and the student ID into a single markdown call
+                r_cols[0].markdown(
+                    f'<span class="roster-row-marker"></span><span class="roster-cell-id">{row.get("Student ID", "")}</span>',
                     unsafe_allow_html=True
                 )
-            else:
-                r_cols[8].markdown(
-                    '<span class="sr-risk-none">ON TRACK</span>',
+        
+                r_cols[1].markdown(
+            f'<span class="roster-cell-text"><b>{row.get("Name", "")}</b></span>',
+            unsafe_allow_html=True
+        )
+        
+                r_cols[2].markdown(
+                    f'<span class="roster-cell-text">{row.get("Cohort", "")}</span>',
                     unsafe_allow_html=True
                 )
-    
-            with r_cols[9]:
-                st.button(
-                    "**View\nProfile**",
-                    key=f"view_{key_prefix}_{row.get('Student ID', '')}",
-                    use_container_width=True,
-                    on_click=go_to_profile,
-                    args=(row.get("Email", ""),)
+        
+                r_cols[3].markdown(
+                    f'<span class="roster-cell-text">{row.get("Adviser", "")}</span>',
+                    unsafe_allow_html=True
                 )
-    
-            st.markdown('<div class="roster-row-divider"></div>', unsafe_allow_html=True)
+        
+                r_cols[4].markdown(
+                    get_stage_badge("coursework", row.get("Coursework", "")),
+                    unsafe_allow_html=True
+                )
+        
+                r_cols[5].markdown(
+                    get_stage_badge("comprehensive_exam", row.get("Comprehensive Exam", "")),
+                    unsafe_allow_html=True
+                )
+        
+                r_cols[6].markdown(
+                    get_stage_badge("capstone", row.get("Capstone", "")),
+                    unsafe_allow_html=True
+                )
+        
+                last_upd = row.get("Last Update", "")
+                display_date = last_upd if str(last_upd).strip() != "N/A" else "—"
+        
+                r_cols[7].markdown(
+                    f'<span class="roster-cell-text">{display_date}</span>',
+                    unsafe_allow_html=True
+                )
+        
+                risk_status = str(row.get("Risk Status", "")).strip()
+        
+                if risk_status == "Flagged":
+                    r_cols[8].markdown(
+                        '<span class="sr-risk-pill">AT RISK</span>',
+                        unsafe_allow_html=True
+                    )
+                else:
+                    r_cols[8].markdown(
+                        '<span class="sr-risk-none">ON TRACK</span>',
+                        unsafe_allow_html=True
+                    )
+        
+                with r_cols[9]:
+                    st.button(
+                        "**View\nProfile**",
+                        key=f"view_{key_prefix}_{row.get('Student ID', '')}",
+                        use_container_width=True,
+                        on_click=go_to_profile,
+                        args=(row.get("Email", ""),)
+                    )
+        
+                st.markdown('<div class="roster-row-divider"></div>', unsafe_allow_html=True)
     
         st.caption(f"Showing {len(display_df)} students.")
 
@@ -1650,131 +1715,122 @@ def render_student_profile(df_all):
             st.caption(f"🕒 Last Updated: `{cap_updated}`")
 
     st.divider()
-    tab_courses, tab_milestones, tab_remarks = st.tabs(["📖 Course Progress", "🚩 Lifecycle Milestones", "📝 Remarks & Admin Actions"])
 
-    with tab_courses:
-        st.markdown("##### Enrolled Curriculum & Course Records")
-        courses_df = fetch_student_courses(student["student_number"])
-        if not courses_df.empty: st.dataframe(courses_df, hide_index=True, use_container_width=True)
-        else: st.info("No course enrollment records populated for this student.")
+    st.markdown("##### Graduation Tracking & Advisor Notes")
+    c1, c2 = st.columns(2)
+    
+    raw_ontime = student.get("graduate_on_time")
+    display_ontime = str(raw_ontime).strip() if pd.notna(raw_ontime) and str(raw_ontime).strip().lower() not in ("nan", "none", "") else "Under Evaluation"
+    c1.write(f"**Graduating On Time:** {display_ontime}")
+    
+    raw_term = student.get("graduate_date_term_sy")
+    display_term = "To Be Determined (TBD)"
+    
+    if pd.notna(raw_term) and str(raw_term).strip().lower() not in ("nan", "none", ""):
+        term_str = str(raw_term).strip().upper()
+        match = re.match(r'^(\d)([TQ])(\d{2})(\d{2})$', term_str)
+        if match:
+            t_num, t_type, y1, y2 = match.groups()
+            display_term = f"{t_num}{t_type}, A.Y. 20{y1}–20{y2}"
+        else:
+            display_term = term_str
 
-    with tab_milestones:
-        st.markdown("##### Milestone Clearances")
-        milestones_df = fetch_student_milestones(student["student_number"])
-        if not milestones_df.empty: st.dataframe(milestones_df, hide_index=True, use_container_width=True)
-        else: st.info("No milestone events recorded in `student_lifecycle_status`.")
+    c2.write(f"**Target Graduation Term:** {display_term}")
 
-    with tab_remarks:
-        st.markdown("##### Graduation Tracking & Advisor Notes")
-        c1, c2 = st.columns(2)
+    is_authorized_editor = user.get("can_edit", False)
+
+    st.markdown("---")
+    st.markdown("##### ✏️ Update Student Record")
+    
+    with st.form("full_edit_form"):
+        try:
+            advisers_df = conn.query("SELECT full_name FROM advisers ORDER BY full_name", ttl=60)
+            adv_list = ["Unassigned"] + [name for name in advisers_df["full_name"].dropna().tolist() if name.strip()]
+        except Exception:
+            adv_list = ["Unassigned"]
         
-        raw_ontime = student.get("graduate_on_time")
-        display_ontime = str(raw_ontime).strip() if pd.notna(raw_ontime) and str(raw_ontime).strip().lower() not in ("nan", "none", "") else "Under Evaluation"
-        c1.write(f"**Graduating On Time:** {display_ontime}")
+        curr_adv = student.get('adviser') if pd.notna(student.get('adviser')) else "Unassigned"
+        if curr_adv not in adv_list: adv_list.append(curr_adv)
+
+        cw_opts = ["Pending", "Completed", "Cancelled"]
+        ce_opts = ["In-Progress", "Passed", "Incomplete"]
+        cap_opts = ["In-Progress", "Defended", "Incomplete"]
+
+        def get_idx(val, lst): return lst.index(val) if val in lst else 0
+
+        c_form1, c_form2 = st.columns(2)
+        with c_form1:
+            new_cw = st.selectbox("Coursework Status", cw_opts, index=get_idx(student["coursework_display"], cw_opts))
+            new_ce = st.selectbox("Comprehensive Exam Status", ce_opts, index=get_idx(student["comprehensive_exam_display"], ce_opts))
+        with c_form2:
+            new_cap = st.selectbox("Capstone Status", cap_opts, index=get_idx(student["capstone_display"], cap_opts))
+            new_adv = st.selectbox("Primary Adviser", adv_list, index=get_idx(curr_adv, adv_list))
+
+        existing_remarks = str(student["remarks"]) if pd.notna(student["remarks"]) else ""
+        new_remarks = st.text_area("Administrative Remarks", value=existing_remarks)
         
-        raw_term = student.get("graduate_date_term_sy")
-        display_term = "To Be Determined (TBD)"
-        
-        if pd.notna(raw_term) and str(raw_term).strip().lower() not in ("nan", "none", ""):
-            term_str = str(raw_term).strip().upper()
-            match = re.match(r'^(\d)([TQ])(\d{2})(\d{2})$', term_str)
-            if match:
-                t_num, t_type, y1, y2 = match.groups()
-                display_term = f"{t_num}{t_type}, A.Y. 20{y1}–20{y2}"
+        submitted = st.form_submit_button("Save Changes to Database", type="primary")
+
+        if submitted:
+            if not is_authorized_editor:
+                log_security_event(user["user_id"], "UNAUTHORIZED_WRITE_ATTEMPT", f"Blocked attempt to update record for Student ID {student['student_number']} without edit permissions.")
+                st.error("⛔ Access Denied: Your account role is View-Only. This unauthorized attempt has been logged.")
             else:
-                display_term = term_str
-
-        c2.write(f"**Target Graduation Term:** {display_term}")
-
-        is_authorized_editor = user.get("can_edit", False)
-
-        st.markdown("---")
-        st.markdown("##### ✏️ Update Student Record")
-        
-        with st.form("full_edit_form"):
-            try:
-                advisers_df = conn.query("SELECT full_name FROM advisers ORDER BY full_name", ttl=60)
-                adv_list = ["Unassigned"] + [name for name in advisers_df["full_name"].dropna().tolist() if name.strip()]
-            except Exception:
-                adv_list = ["Unassigned"]
-            
-            curr_adv = student.get('adviser') if pd.notna(student.get('adviser')) else "Unassigned"
-            if curr_adv not in adv_list: adv_list.append(curr_adv)
-
-            cw_opts = ["Pending", "Completed", "Cancelled"]
-            ce_opts = ["In-Progress", "Passed", "Incomplete"]
-            cap_opts = ["In-Progress", "Defended", "Incomplete"]
-
-            def get_idx(val, lst): return lst.index(val) if val in lst else 0
-
-            c_form1, c_form2 = st.columns(2)
-            with c_form1:
-                new_cw = st.selectbox("Coursework Status", cw_opts, index=get_idx(student["coursework_display"], cw_opts))
-                new_ce = st.selectbox("Comprehensive Exam Status", ce_opts, index=get_idx(student["comprehensive_exam_display"], ce_opts))
-            with c_form2:
-                new_cap = st.selectbox("Capstone Status", cap_opts, index=get_idx(student["capstone_display"], cap_opts))
-                new_adv = st.selectbox("Primary Adviser", adv_list, index=get_idx(curr_adv, adv_list))
-
-            existing_remarks = str(student["remarks"]) if pd.notna(student["remarks"]) else ""
-            new_remarks = st.text_area("Administrative Remarks", value=existing_remarks)
-            
-            submitted = st.form_submit_button("Save Changes to Database", type="primary")
-
-            if submitted:
-                if not is_authorized_editor:
-                    log_security_event(user["user_id"], "UNAUTHORIZED_WRITE_ATTEMPT", f"Blocked attempt to update record for Student ID {student['student_number']} without edit permissions.")
-                    st.error("⛔ Access Denied: Your account role is View-Only. This unauthorized attempt has been logged.")
-                else:
-                    cw_db_map = {"Pending": "pending", "Completed": "completed", "Cancelled": "cancelled"}
-                    ce_db_map = {"Passed": "done", "In-Progress": "not yet taken", "Incomplete": "incomplete"}
-                    cap_db_map = {"Defended": "done", "In-Progress": "not yet done", "Incomplete": "incomplete"}
-                    
-                    cw_val = cw_db_map.get(new_cw, "pending")
-                    ce_val = ce_db_map.get(new_ce, "incomplete")
-                    cap_val = cap_db_map.get(new_cap, "incomplete")
-                    
-                    try:
-                        with conn.session as s:
-                            adv_id = None
-                            if new_adv != "Unassigned":
-                                adv_res = s.execute(text("SELECT adviser_id FROM advisers WHERE full_name = :name"), {"name": new_adv}).fetchone()
-                                if adv_res: adv_id = adv_res[0]
-                                    
-                            s.execute(
-                                text("""
-                                    UPDATE students_normalized 
-                                    SET remarks = :rem, adviser_id = :adv
-                                    WHERE student_number = :sn;
-                                """),
-                                {"rem": new_remarks, "adv": adv_id, "sn": int(student["student_number"])}
+                cw_db_map = {"Pending": "pending", "Completed": "completed", "Cancelled": "cancelled"}
+                ce_db_map = {"Passed": "done", "In-Progress": "not yet taken", "Incomplete": "incomplete"}
+                cap_db_map = {"Defended": "done", "In-Progress": "not yet done", "Incomplete": "incomplete"}
+                
+                cw_val = cw_db_map.get(new_cw, "pending")
+                ce_val = ce_db_map.get(new_ce, "incomplete")
+                cap_val = cap_db_map.get(new_cap, "incomplete")
+                
+                try:
+                    with conn.session as s:
+                        adv_id = None
+                        if new_adv != "Unassigned":
+                            adv_res = s.execute(text("SELECT adviser_id FROM advisers WHERE full_name = :name"), {"name": new_adv}).fetchone()
+                            if adv_res: adv_id = adv_res[0]
+                                
+                        # Always update remarks and adviser unconditionally
+                        s.execute(
+                            text("""
+                                UPDATE students_normalized 
+                                SET remarks = :rem, adviser_id = :adv
+                                WHERE student_number = :sn;
+                            """),
+                            {"rem": new_remarks, "adv": adv_id, "sn": int(student["student_number"])}
+                        )
+                        
+                        upsert_sql = text("""
+                            INSERT INTO student_lifecycle_status (student_number, stage_id, status_id, last_updated_date)
+                            VALUES (
+                                :sn, 
+                                (SELECT stage_id FROM lifecycle_stage WHERE stage_name = :stage_name),
+                                (SELECT status_id FROM lifecycle_status WHERE status_name = :status_name),
+                                NOW()
                             )
-                            
-                            upsert_sql = text("""
-                                INSERT INTO student_lifecycle_status (student_number, stage_id, status_id, last_updated_date)
-                                VALUES (
-                                    :sn, 
-                                    (SELECT stage_id FROM lifecycle_stage WHERE stage_name = :stage_name),
-                                    (SELECT status_id FROM lifecycle_status WHERE status_name = :status_name),
-                                    NOW()
-                                )
-                                ON CONFLICT (student_number, stage_id) 
-                                DO UPDATE SET status_id = EXCLUDED.status_id, last_updated_date = NOW();
-                            """)
-                            
+                            ON CONFLICT (student_number, stage_id) 
+                            DO UPDATE SET status_id = EXCLUDED.status_id, last_updated_date = NOW();
+                        """)
+                        
+                        # ONLY update lifecycle stage timestamps if the status was actually changed
+                        if new_cw != student.get("coursework_display"):
                             s.execute(upsert_sql, {"sn": int(student["student_number"]), "stage_name": "coursework", "status_name": cw_val})
+                        if new_ce != student.get("comprehensive_exam_display"):
                             s.execute(upsert_sql, {"sn": int(student["student_number"]), "stage_name": "comprehensive_exam", "status_name": ce_val})
+                        if new_cap != student.get("capstone_display"):
                             s.execute(upsert_sql, {"sn": int(student["student_number"]), "stage_name": "capstone", "status_name": cap_val})
-                            
-                            s.commit()
                         
-                        log_security_event(user["user_id"], "STUDENT_RECORD_UPDATED", f"Modified record for Student ID {student['student_number']} (CW: {new_cw}, Exam: {new_ce}, Capstone: {new_cap}).")
-                        st.success("Record successfully updated in Supabase!")
-                        load_students.clear()
-                        fetch_student_milestones.clear()
-                        st.rerun()
-                        
-                    except Exception as err:
-                        st.error(f"Write operation failed: {err}")
+                        s.commit()
+                    
+                    log_security_event(user["user_id"], "STUDENT_RECORD_UPDATED", f"Modified record for Student ID {student['student_number']} (CW: {new_cw}, Exam: {new_ce}, Capstone: {new_cap}).")
+                    st.success("Record successfully updated in Supabase!")
+                    load_students.clear()
+                    fetch_student_milestones.clear()
+                    st.rerun()
+                    
+                except Exception as err:
+                    st.error(f"Write operation failed: {err}")
 
 # ------------------------------------------------------------------
 # FOOTER HELPER
