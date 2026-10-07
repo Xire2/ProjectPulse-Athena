@@ -883,13 +883,13 @@ def render_student_list(df_all):
             "LAST UPDATE", "RISK", "ACTION"
         ]
 
-    header_cols = st.columns(col_widths, vertical_alignment="center")
-
-    for col, label in zip(header_cols, header_labels):
-        col.markdown(
-            f'<div class="roster-th">{label}</div>',
-            unsafe_allow_html=True
-        )
+        header_cols = st.columns(col_widths, vertical_alignment="center")
+    
+        for col, label in zip(header_cols, header_labels):
+            col.markdown(
+                f'<div class="roster-th">{label}</div>',
+                unsafe_allow_html=True
+            )
 
     st.markdown(
         '<div class="roster-th-divider"></div>',
