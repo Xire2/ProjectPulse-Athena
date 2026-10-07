@@ -32,7 +32,7 @@ st.markdown("""
 }
 
 div[data-testid="stHorizontalBlock"] {
-    min-width: 0;
+    min-width: max-content;
 }
 
 div[data-testid="stHorizontalBlock"] > div {
@@ -75,7 +75,11 @@ div[data-testid="stVerticalBlockBorderWrapper"] {
     min-width: 0 !important;
     max-width: 100% !important;
 }
-
+@media (min-width: 769px) and (max-width: 1100px) {
+    [data-testid="stAppViewContainer"] .main .block-container {
+        min-width: 1100px;
+    }
+}
 @media (max-width: 1100px) {
     div[data-testid="stMetricValue"] div {
         font-size: 1.7rem !important;
