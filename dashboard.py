@@ -258,7 +258,6 @@ def get_current_term():
         return None
 
     return current_term_df.iloc[0]
-```python
 # ------------------------------------------------------------------
 # ADD DATA / IMPORT HELPERS
 # ------------------------------------------------------------------
