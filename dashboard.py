@@ -12,6 +12,20 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import re
 import os
+import io
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mtick
+from reportlab.lib import colors as rl_colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.platypus import (
+    SimpleDocTemplate, Table, TableStyle, Paragraph,
+    Spacer, Image as RLImage, PageBreak
+)
+
 
 # Generic title
 st.set_page_config(page_title="Project Pulse — Program Dashboard", page_icon="🎓", layout="wide")
@@ -970,6 +984,907 @@ def render_completion_trend_chart(df_all, active_program):
     st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
 # ------------------------------------------------------------------
+# EXPORT: INDIVIDUAL STUDENT PROFILE (PDF)
+# ------------------------------------------------------------------
+def generate_student_pdf(
+    student, milestones_df, cw_updated, ce_updated, cap_updated,
+    user_email, active_program, last_sync_time,
+) -> bytes:
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.lib import colors as rl_colors
+    from reportlab.platypus import (
+        SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer,
+    )
+
+    def _safe(v, fallback="N/A"):
+        if v is None:
+            return fallback
+        try:
+            if pd.isna(v):
+                return fallback
+        except Exception:
+            pass
+        s = str(v).strip()
+        return s if s and s.lower() not in ("nan", "none", "") else fallback
+
+    def _stage_color(stage, label):
+        rule = STAGE_THRESHOLDS.get(stage, {})
+        clean = str(label).strip()
+        if clean in rule.get("green", []):  return "#0DC249"
+        if clean in rule.get("yellow", []): return "#FFAE00"
+        if clean in rule.get("red", []):    return "#D50000"
+        return "#999999"
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=letter,
+        leftMargin=0.5 * inch, rightMargin=0.5 * inch,
+        topMargin=0.5 * inch, bottomMargin=0.5 * inch,
+        title=f"Student Profile — {_safe(student.get('full_name'), 'Student')}",
+    )
+    styles = getSampleStyleSheet()
+    story = []
+
+    RED   = rl_colors.HexColor("#B92B27")
+    DARK  = rl_colors.HexColor("#1F2937")
+    GRAY  = rl_colors.HexColor("#6B7280")
+    LIGHT = rl_colors.HexColor("#E5E7EB")
+
+    # ---------- Red banner ----------
+    name = _safe(student.get("full_name"), "Student")
+    banner = Table(
+        [[Paragraph(
+            f'<font color="white" size="15"><b>Student Profile — {name}</b></font>',
+            ParagraphStyle("banner", parent=styles["Normal"], leading=20)
+        )]],
+        colWidths=[7.5 * inch]
+    )
+    banner.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), RED),
+        ("LEFTPADDING", (0, 0), (-1, -1), 14),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 14),
+        ("TOPPADDING", (0, 0), (-1, -1), 12),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+    ]))
+    story.append(banner)
+    story.append(Spacer(1, 8))
+
+    exported_at = datetime.now(ZoneInfo("Asia/Manila")).strftime("%b %d, %Y %I:%M %p")
+    story.append(Paragraph(
+        f"<font color='#6B7280' size='8'>Generated {exported_at} by {user_email} · "
+        f"{active_program} Program</font>",
+        ParagraphStyle("meta", parent=styles["Normal"], fontSize=8, leading=11)
+    ))
+    story.append(Spacer(1, 12))
+
+    # ---------- Student identity block ----------
+    info_rows = [
+        ["Student ID", _safe(student.get("student_number")),
+         "Program",    _safe(student.get("program"), active_program)],
+        ["Email",      _safe(student.get("student_email")),
+         "Cohort",     _safe(student.get("cohort"))],
+        ["Adviser",    _safe(student.get("adviser"), "Unassigned"),
+         "Overall Status", _safe(student.get("overall_status"))],
+    ]
+    info_tbl = Table(info_rows, colWidths=[0.95 * inch, 2.85 * inch, 1.05 * inch, 2.65 * inch])
+    info_tbl.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 9.5),
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+        ("FONTNAME", (2, 0), (2, -1), "Helvetica-Bold"),
+        ("TEXTCOLOR", (0, 0), (0, -1), GRAY),
+        ("TEXTCOLOR", (2, 0), (2, -1), GRAY),
+        ("TEXTCOLOR", (1, 0), (1, -1), DARK),
+        ("TEXTCOLOR", (3, 0), (3, -1), DARK),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("LINEBELOW", (0, 0), (-1, -1), 0.25, LIGHT),
+    ]))
+    story.append(info_tbl)
+    story.append(Spacer(1, 14))
+
+    # ---------- At-risk alert ----------
+    if bool(student.get("is_at_risk")):
+        risk_text = _safe(student.get("risk_details"), "Threshold exceeded")
+        alert = Table(
+            [[Paragraph(
+                f'<font color="#B91C1C"><b>AT-RISK FLAG:</b></font> '
+                f'<font color="#7F1D1D">{risk_text}</font>',
+                ParagraphStyle("alert", parent=styles["Normal"], fontSize=9, leading=12)
+            )]],
+            colWidths=[7.5 * inch]
+        )
+        alert.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), rl_colors.HexColor("#FEE2E2")),
+            ("BOX", (0, 0), (-1, -1), 0.75, rl_colors.HexColor("#D50000")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 12),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+            ("TOPPADDING", (0, 0), (-1, -1), 9),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 9),
+        ]))
+        story.append(alert)
+        story.append(Spacer(1, 14))
+
+    # ---------- Lifecycle stage cards ----------
+    story.append(Paragraph(
+        '<font color="#B92B27" size="11"><b>PROGRAM LIFECYCLE SUMMARY</b></font>',
+        ParagraphStyle("sect1", parent=styles["Normal"], fontSize=11, leading=14)
+    ))
+    story.append(Spacer(1, 6))
+
+    cw_label  = _safe(student.get("coursework_display"))
+    ce_label  = _safe(student.get("comprehensive_exam_display"))
+    cap_label = _safe(student.get("capstone_display"))
+
+    def _stage_card(title, label, updated, accent):
+        inner = Table(
+            [
+                [Paragraph(f'<font color="{accent}"><b>{title}</b></font>',
+                           ParagraphStyle("sc", parent=styles["Normal"], fontSize=8.5, leading=11))],
+                [Paragraph(f'<font color="{accent}" size="11"><b>{label}</b></font>',
+                           ParagraphStyle("sv", parent=styles["Normal"], fontSize=11, leading=14))],
+                [Paragraph(f'<font color="#777777" size="7.5">Updated: {updated}</font>',
+                           ParagraphStyle("su", parent=styles["Normal"], fontSize=7.5, leading=10))],
+            ],
+            colWidths=[2.4 * inch]
+        )
+        inner.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), rl_colors.HexColor("#FAFAFA")),
+            ("BOX", (0, 0), (-1, -1), 0.4, LIGHT),
+            ("LINEABOVE", (0, 0), (0, 0), 3, rl_colors.HexColor(accent)),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ]))
+        return inner
+
+    cards_row = Table(
+        [[
+            _stage_card("Coursework",           cw_label,  cw_updated,  _stage_color("coursework", cw_label)),
+            _stage_card("Comprehensive Exam",   ce_label,  ce_updated,  _stage_color("comprehensive_exam", ce_label)),
+            _stage_card("Capstone & Defense",   cap_label, cap_updated, _stage_color("capstone", cap_label)),
+        ]],
+        colWidths=[2.5 * inch] * 3
+    )
+    cards_row.setStyle(TableStyle([
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ]))
+    story.append(cards_row)
+    story.append(Spacer(1, 16))
+
+    # ---------- Graduation tracking ----------
+    story.append(Paragraph(
+        '<font color="#B92B27" size="11"><b>GRADUATION TRACKING</b></font>',
+        ParagraphStyle("sect2", parent=styles["Normal"], fontSize=11, leading=14)
+    ))
+    story.append(Spacer(1, 6))
+
+    raw_ontime = student.get("graduate_on_time")
+    display_ontime = _safe(raw_ontime, "Under Evaluation")
+
+    raw_term = student.get("graduate_date_term_sy")
+    display_term = "To Be Determined (TBD)"
+    if pd.notna(raw_term) and str(raw_term).strip().lower() not in ("nan", "none", ""):
+        term_str = str(raw_term).strip().upper()
+        mt = re.match(r'^(\d)([TQ])(\d{2})(\d{2})$', term_str)
+        if mt:
+            t_num, t_type, y1, y2 = mt.groups()
+            display_term = f"{t_num}{t_type}, A.Y. 20{y1}–20{y2}"
+        else:
+            display_term = term_str
+
+    grad_tbl = Table(
+        [
+            ["Graduating On Time",      display_ontime],
+            ["Target Graduation Term",  display_term],
+        ],
+        colWidths=[2.0 * inch, 5.5 * inch]
+    )
+    grad_tbl.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 9.5),
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+        ("TEXTCOLOR", (0, 0), (0, -1), GRAY),
+        ("TEXTCOLOR", (1, 0), (1, -1), DARK),
+        ("BACKGROUND", (0, 0), (-1, -1), rl_colors.HexColor("#FAFAFA")),
+        ("BOX", (0, 0), (-1, -1), 0.4, LIGHT),
+        ("INNERGRID", (0, 0), (-1, -1), 0.25, LIGHT),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+    ]))
+    story.append(grad_tbl)
+    story.append(Spacer(1, 16))
+
+    # ---------- Administrative remarks ----------
+    story.append(Paragraph(
+        '<font color="#B92B27" size="11"><b>ADMINISTRATIVE REMARKS</b></font>',
+        ParagraphStyle("sect3", parent=styles["Normal"], fontSize=11, leading=14)
+    ))
+    story.append(Spacer(1, 6))
+
+    remarks = _safe(student.get("remarks"), "No administrative remarks on file.")
+    safe_remarks = (remarks.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                           .replace("\n", "<br/>"))
+    rem_tbl = Table(
+        [[Paragraph(safe_remarks, ParagraphStyle(
+            "rem", parent=styles["Normal"], fontSize=9.5, leading=13, textColor=DARK
+        ))]],
+        colWidths=[7.5 * inch]
+    )
+    rem_tbl.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), rl_colors.HexColor("#FAFAFA")),
+        ("BOX", (0, 0), (-1, -1), 0.4, LIGHT),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("TOPPADDING", (0, 0), (-1, -1), 9),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 9),
+    ]))
+    story.append(rem_tbl)
+
+    # ---------- Footer ----------
+    story.append(Spacer(1, 24))
+    story.append(Paragraph(
+        f'<font color="#9CA3AF" size="7.5">Project Pulse Student Profile · '
+        f'Data last synced {last_sync_time} · Generated {exported_at} by {user_email}</font>',
+        ParagraphStyle("footer", parent=getSampleStyleSheet()["Normal"],
+                       fontSize=7.5, leading=10, alignment=1)
+    ))
+
+    doc.build(story)
+    return buf.getvalue()
+
+# ------------------------------------------------------------------
+# EXPORT HELPERS
+# ------------------------------------------------------------------
+def _compute_cohort_trends(df_all: pd.DataFrame, last_n: int = 4):
+    """
+    Returns (cohorts, completion_rates, at_risk_counts, at_risk_pcts)
+    for the last `last_n` cohorts, ordered chronologically.
+    All rates are percentages (0–100) for on-screen use; the XLSX writer
+    divides by 100 before formatting.
+    """
+    if df_all is None or df_all.empty or "cohort" not in df_all.columns:
+        return [], [], [], []
+
+    valid = sorted(
+        [str(c) for c in df_all["cohort"].dropna().unique() if str(c).strip()],
+        key=get_cohort_val
+    )[-last_n:]
+
+    comp_rates, risk_counts, risk_pcts = [], [], []
+    for c in valid:
+        sub = df_all[df_all["cohort"].astype(str) == c]
+        total = len(sub)
+        completed = len(sub[
+            (sub["coursework_display"] == "Completed") &
+            (sub["comprehensive_exam_display"] == "Passed") &
+            (sub["capstone_display"] == "Defended")
+        ])
+        comp_rates.append((completed / total * 100) if total else 0.0)
+        ar = int(sub["is_at_risk"].sum()) if "is_at_risk" in sub.columns else 0
+        risk_counts.append(ar)
+        risk_pcts.append((ar / total * 100) if total else 0.0)
+
+    return valid, comp_rates, risk_counts, risk_pcts
+
+
+def _build_at_risk_export_df(df_summary: pd.DataFrame) -> pd.DataFrame:
+    """
+    Normalizes the at-risk subset of df_summary into the 16-column
+    schema used by the export sheet.
+    """
+    if df_summary is None or df_summary.empty:
+        return pd.DataFrame()
+
+    at_risk = df_summary[df_summary["is_at_risk"] == True].copy()
+    if at_risk.empty:
+        return pd.DataFrame()
+
+    now_utc = pd.Timestamp.utcnow()
+    rows = []
+    for _, r in at_risk.iterrows():
+        if r.get("coursework_display") != "Completed":
+            curr_stage, stage_col = "Coursework Completion", "cw_updated_at"
+        elif r.get("comprehensive_exam_display") != "Passed":
+            curr_stage, stage_col = "Comprehensive Exam", "ce_updated_at"
+        elif r.get("capstone_display") != "Defended":
+            curr_stage, stage_col = "Capstone Paper", "cap_updated_at"
+        else:
+            curr_stage, stage_col = "Completed", None
+
+        days_in_stage, threshold = "", ""
+        if stage_col and stage_col in r and pd.notna(r[stage_col]):
+            try:
+                ts = pd.to_datetime(r[stage_col], utc=True)
+                days_in_stage = int((now_utc - ts).days)
+            except Exception:
+                pass
+
+        risk_text = str(r.get("risk_details", "") or "")
+        m = re.search(r"for (\d+) days \(Limit: (\d+)\)", risk_text)
+        if m:
+            if days_in_stage == "":
+                days_in_stage = int(m.group(1))
+            threshold = int(m.group(2))
+
+        rows.append({
+            "Student Number": r.get("student_number", ""),
+            "First Name": r.get("first_name", ""),
+            "Last Name": r.get("last_name", ""),
+            "Program": r.get("program", ""),
+            "Cohort": r.get("cohort", ""),
+            "Enrollment Status": "Conditionally Enrolled",
+            "Adviser(s)": r.get("adviser", ""),
+            "Current Stage": curr_stage,
+            "Coursework Completion Status": r.get("coursework_display", ""),
+            "Comprehensive Exam Status": r.get("comprehensive_exam_display", ""),
+            "Capstone Paper Status": r.get("capstone_display", ""),
+            "Time in Stage (days)": days_in_stage,
+            "At-Risk Threshold (days)": threshold,
+            "Flag Reason": risk_text,
+            "Graduate On Time": (
+                r.get("graduate_on_time", "")
+                if pd.notna(r.get("graduate_on_time"))
+                else "N/A"
+            ),
+            "Last Updated": r.get("coursework_updated_at", ""),
+        })
+
+    return pd.DataFrame(rows)
+# ------------------------------------------------------------------
+# EXPORT: PDF & XLSX (dashboard-styled)
+# ------------------------------------------------------------------
+def _percent_buckets(df_summary, total_students, fully_completed,
+                     current_cw, current_ce, current_cap):
+    """Return (coursework%, comp_exam%, capstone%, overall%) as floats 0–100."""
+    if total_students <= 0:
+        return 0.0, 0.0, 0.0, 0.0
+    return (
+        current_cw / total_students * 100,
+        current_ce / total_students * 100,
+        current_cap / total_students * 100,
+        fully_completed / total_students * 100,
+    )
+
+
+def _per_cohort_on_time(df_all, cohorts):
+    """On-time graduation % per cohort (list of floats 0–100)."""
+    out = []
+    for c in cohorts:
+        sub = df_all[df_all["cohort"].astype(str) == c]
+        n = len(sub)
+        if n == 0:
+            out.append(0.0)
+            continue
+        yes = int(
+            sub["graduate_on_time"].astype(str).str.strip().str.lower()
+            .isin(["yes", "y", "true", "1"]).sum()
+        )
+        out.append(yes / n * 100)
+    return out
+
+
+def generate_executive_pdf(
+    df_summary, df_all, active_cohort, selected_adviser,
+    total_students, on_time_rate, completion_rate, remaining_students, at_risk_count,
+    fully_completed, current_cap, current_ce, current_cw,
+    user_email, active_program, last_sync_time,
+) -> bytes:
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.lib import colors as rl_colors
+    from reportlab.platypus import (
+        SimpleDocTemplate, Table, TableStyle, Paragraph,
+        Spacer, Image as RLImage, PageBreak,
+    )
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=letter,
+        leftMargin=0.45 * inch, rightMargin=0.45 * inch,
+        topMargin=0.45 * inch, bottomMargin=0.45 * inch,
+        title=f"Executive Overview — {active_program}",
+    )
+    styles = getSampleStyleSheet()
+    story = []
+
+    RED   = rl_colors.HexColor("#B92B27")
+    DARK  = rl_colors.HexColor("#1F2937")
+    GRAY  = rl_colors.HexColor("#6B7280")
+    LIGHT = rl_colors.HexColor("#E5E7EB")
+    GREEN = rl_colors.HexColor("#10B981")
+    HEAD  = rl_colors.HexColor("#374151")
+
+    # ---------- Red banner ----------
+    banner = Table(
+        [[Paragraph(
+            f'<font color="white" size="15"><b>Executive Overview — {active_program} Program</b></font>',
+            ParagraphStyle("banner", parent=styles["Normal"], leading=20)
+        )]],
+        colWidths=[7.6 * inch]
+    )
+    banner.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), RED),
+        ("LEFTPADDING", (0, 0), (-1, -1), 14),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 14),
+        ("TOPPADDING", (0, 0), (-1, -1), 12),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+    ]))
+    story.append(banner)
+    story.append(Spacer(1, 6))
+
+    meta = ParagraphStyle("meta", parent=styles["Normal"], fontSize=8,
+                          textColor=GRAY, leading=11)
+    exported_at = datetime.now(ZoneInfo("Asia/Manila")).strftime("%b %d, %Y %I:%M %p")
+    story.append(Paragraph(f"Exported {exported_at} by {user_email}", meta))
+    story.append(Paragraph(f"Data last updated {last_sync_time}", meta))
+    story.append(Paragraph(
+        f"<b>Cohort:</b> {active_cohort} · <b>Adviser:</b> {selected_adviser} · "
+        f"<b>Program:</b> {active_program}", meta))
+    story.append(Spacer(1, 14))
+
+    # ---------- KPI cards ----------
+    labels = ["TOTAL STUDENTS", "ON-TIME GRAD RATE", "OVERALL COMPLETION",
+              "REMAINING STUDENTS", "STUDENTS AT RISK"]
+    values = [str(total_students), f"{on_time_rate:.1f}%", f"{completion_rate}%",
+              str(remaining_students), str(at_risk_count)]
+    grad_yes = int(total_students * on_time_rate / 100) if total_students else 0
+    hints = [
+        (str(active_cohort), GRAY),
+        (f"\u2191 {grad_yes} of {total_students} students", GREEN),
+        (f"\u2191 {fully_completed} of {total_students} students", GREEN),
+        (f"\u2191 {remaining_students} of {total_students} students", GREEN),
+        (f"\u2191 {at_risk_count} of {total_students} students", RED),
+    ]
+
+    lbl_style = ParagraphStyle("kl", parent=styles["Normal"], fontSize=7,
+                               textColor=GRAY, leading=9)
+    val_style = ParagraphStyle("kv", parent=styles["Normal"], fontSize=18,
+                               leading=22, textColor=DARK)
+    def _hint(t, c):
+        return Paragraph(t, ParagraphStyle("kh", parent=styles["Normal"],
+                                            fontSize=7.5, leading=10, textColor=c))
+
+    card_w = 1.52 * inch
+    kpi = Table(
+        [["", "", "", "", ""],
+         [Paragraph(f"<b>{l}</b>", lbl_style) for l in labels],
+         [Paragraph(f"<b>{v}</b>", val_style) for v in values],
+         [_hint(t, c) for t, c in hints]],
+        colWidths=[card_w] * 5, rowHeights=[4, 14, 30, 14]
+    )
+    kpi.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), RED),
+        ("BOX", (0, 1), (0, -1), 0.4, LIGHT),
+        ("BOX", (1, 1), (1, -1), 0.4, LIGHT),
+        ("BOX", (2, 1), (2, -1), 0.4, LIGHT),
+        ("BOX", (3, 1), (3, -1), 0.4, LIGHT),
+        ("BOX", (4, 1), (4, -1), 0.4, LIGHT),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 1), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 1), (-1, -1), 4),
+    ]))
+    story.append(kpi)
+    story.append(Spacer(1, 16))
+
+    # ---------- Trend data ----------
+    cohorts, comp_rates, _, _ = _compute_cohort_trends(df_all, last_n=4)
+    on_time_rates = _per_cohort_on_time(df_all, cohorts)
+    cw_pct, ce_pct, cap_pct, ov_pct = _percent_buckets(
+        df_summary, total_students, fully_completed, current_cw, current_ce, current_cap)
+
+    def _img_from_fig(fig, width_in, height_in):
+        b = io.BytesIO()
+        fig.savefig(b, format="png", bbox_inches="tight", dpi=150, facecolor="white")
+        plt.close(fig); b.seek(0)
+        return RLImage(b, width=width_in * inch, height=height_in * inch)
+
+    # ---------- Chart A: Lifecycle (full width) ----------
+    figA, axA = plt.subplots(figsize=(7.6, 2.1), dpi=150)
+    stages_bu = ["Overall Completion", "Capstone", "Comprehensive Exam", "Coursework"]
+    vals_bu = [ov_pct, cap_pct, ce_pct, cw_pct]
+    bar_cols = ["#0DC249", "#D50000", "#FFAE00", "#0072B2"]
+    bars = axA.barh(stages_bu, vals_bu, color=bar_cols, height=0.55)
+    for b, v in zip(bars, vals_bu):
+        axA.text(v + 2, b.get_y() + b.get_height() / 2, f"{v:.2f}%",
+                 va="center", ha="left", fontsize=9, color="#333333")
+    axA.set_xlim(0, 100)
+    axA.set_xticks([0, 20, 40, 60, 80, 100])
+    axA.set_xticklabels([f"{x}%" for x in [0, 20, 40, 60, 80, 100]])
+    axA.set_xlabel("Percentage of Active Students", fontsize=8, color="#666666")
+    axA.set_title("Lifecycle Stage Breakdown", fontsize=11, fontweight="bold", color="#1F2937")
+    axA.tick_params(labelsize=8)
+    axA.spines["top"].set_visible(False)
+    axA.spines["right"].set_visible(False)
+    axA.grid(axis="x", linestyle=":", alpha=0.3)
+    axA.set_axisbelow(True)
+    plt.tight_layout()
+    story.append(_img_from_fig(figA, 7.6, 2.15))
+    story.append(Spacer(1, 10))
+
+    # ---------- Charts B & C: Trends side-by-side ----------
+    def _trend_chart(y_vals, line_color, marker_color, title, ylabel):
+        fig, ax = plt.subplots(figsize=(3.7, 2.7), dpi=150)
+        if cohorts:
+            ax.plot(cohorts, y_vals, color=line_color, linewidth=2,
+                    marker="o", markerfacecolor=marker_color,
+                    markeredgecolor=marker_color, markersize=8)
+            for x, y in zip(cohorts, y_vals):
+                ax.annotate(f"{y:.1f}%", (x, y), textcoords="offset points",
+                            xytext=(0, 9), ha="center", fontsize=8, color="#333333")
+        ax.set_ylim(0, 100)
+        ax.set_yticks([0, 20, 40, 60, 80, 100])
+        ax.set_ylabel(ylabel, fontsize=8, color="#666666")
+        ax.set_title(title, fontsize=10, fontweight="bold", color="#1F2937")
+        ax.tick_params(labelsize=8)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.grid(axis="y", linestyle=":", alpha=0.3)
+        ax.set_axisbelow(True)
+        plt.tight_layout()
+        return fig
+
+    figB = _trend_chart(comp_rates, "#0072B2", "#FFAE00",
+                        "Overall Completion % — Trend",
+                        "Overall Completion (%)")
+    figC = _trend_chart(on_time_rates, "#D50000", "#FFAE00",
+                        "On-Time Graduation Rate — Trend",
+                        "On-Time Grad Rate (%)")
+
+    imgB = _img_from_fig(figB, 3.7, 2.7)
+    imgC = _img_from_fig(figC, 3.7, 2.7)
+    trend_row = Table([[imgB, imgC]], colWidths=[3.8 * inch, 3.8 * inch])
+    trend_row.setStyle(TableStyle([
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+    ]))
+    story.append(trend_row)
+
+    # ================= PAGE 2: Tables =================
+    story.append(PageBreak())
+
+    def _section(title):
+        story.append(Paragraph(
+            f'<font color="#B92B27" size="11"><b>{title}</b></font>',
+            ParagraphStyle("sec", parent=styles["Heading2"], leading=14)
+        ))
+        story.append(Spacer(1, 4))
+
+    def _data_table(header, rows):
+        tbl = Table([header] + rows, colWidths=[3.6 * inch, 1.6 * inch])
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), HEAD),
+            ("TEXTCOLOR", (0, 0), (-1, 0), rl_colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("GRID", (0, 0), (-1, -1), 0.25, rl_colors.HexColor("#cccccc")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+             [rl_colors.white, rl_colors.HexColor("#f9fafb")]),
+            ("ALIGN", (1, 0), (1, -1), "CENTER"),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        return tbl
+
+    # Table 1: Lifecycle
+    _section("COHORT DISTRIBUTION BY LIFECYCLE STAGE")
+    lifecycle_rows = [
+        ["Coursework",          f"{cw_pct:.2f}%"],
+        ["Comprehensive Exam",  f"{ce_pct:.2f}%"],
+        ["Capstone",            f"{cap_pct:.2f}%"],
+        ["Overall Completion",  f"{ov_pct:.2f}%"],
+    ]
+    story.append(_data_table(["Stage", "% of Active Students"], lifecycle_rows))
+    story.append(Spacer(1, 12))
+
+    # Table 2: Overall Completion trend
+    _section("OVERALL COMPLETION % — TREND (LAST 4 COHORTS)")
+    comp_rows = [[c, f"{r:.1f}%"] for c, r in zip(cohorts, comp_rates)]
+    story.append(_data_table(["Cohort", "Overall Completion %"], comp_rows))
+    story.append(Spacer(1, 12))
+
+    # Table 3: On-Time Grad Rate trend
+    _section("ON-TIME GRADUATION RATE — TREND (LAST 4 COHORTS)")
+    grad_rows = [[c, f"{r:.1f}%"] for c, r in zip(cohorts, on_time_rates)]
+    story.append(_data_table(["Cohort", "On-Time Grad Rate"], grad_rows))
+
+    # Table 4: At-Risk detail
+    story.append(Spacer(1, 14))
+    _section("STUDENTS AT RISK — DETAIL")
+    at_risk_export = _build_at_risk_export_df(df_summary)
+    if at_risk_export.empty:
+        story.append(Paragraph("No students are currently flagged as at-risk.",
+                               styles["Normal"]))
+    else:
+        header = ["Student No.", "Name", "Program", "Cohort", "Current Stage",
+                  "Coursework", "Comp Exam", "Capstone", "Days", "Threshold"]
+        rows = [header]
+        for _, r in at_risk_export.iterrows():
+            rows.append([
+                str(r["Student Number"]),
+                f"{r['First Name']} {r['Last Name']}".strip(),
+                str(r["Program"]),
+                str(r["Cohort"]),
+                str(r["Current Stage"]),
+                str(r["Coursework Completion Status"]),
+                str(r["Comprehensive Exam Status"]),
+                str(r["Capstone Paper Status"]),
+                str(r["Time in Stage (days)"]),
+                str(r["At-Risk Threshold (days)"]),
+            ])
+        col_w = [w * inch for w in [0.72, 1.05, 0.5, 0.55, 0.95, 0.68, 0.65, 0.65, 0.42, 0.58]]
+        tbl = Table(rows, colWidths=col_w, repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), HEAD),
+            ("TEXTCOLOR", (0, 0), (-1, 0), rl_colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 6.5),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("GRID", (0, 0), (-1, -1), 0.25, rl_colors.HexColor("#cccccc")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+             [rl_colors.white, rl_colors.HexColor("#f9fafb")]),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+        ]))
+        story.append(tbl)
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+def generate_executive_xlsx(
+    df_summary, df_all, active_cohort, selected_adviser,
+    total_students, on_time_rate, completion_rate, remaining_students, at_risk_count,
+    fully_completed, current_cap, current_ce, current_cw,
+    user_email, active_program, last_sync_time,
+) -> bytes:
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.drawing.image import Image as XLImage
+    from openpyxl.utils import get_column_letter
+
+    buf = io.BytesIO()
+    exported_at = datetime.now(ZoneInfo("Asia/Manila")).strftime("%b %d, %Y %I:%M %p")
+
+    cohorts, comp_rates, _, _ = _compute_cohort_trends(df_all, last_n=4)
+    on_time_rates = _per_cohort_on_time(df_all, cohorts)
+    cw_pct, ce_pct, cap_pct, ov_pct = _percent_buckets(
+        df_summary, total_students, fully_completed, current_cw, current_ce, current_cap)
+
+    RED, DARK, GRAY, LIGHT = "B92B27", "1F2937", "6B7280", "E5E7EB"
+
+    title_fill   = PatternFill("solid", fgColor=RED)
+    title_font   = Font(bold=True, color="FFFFFF", size=15)
+    head_fill    = PatternFill("solid", fgColor="374151")
+    head_font    = Font(bold=True, color="FFFFFF", size=10)
+    section_font = Font(bold=True, size=11, color=RED)
+    meta_font    = Font(size=9, color=GRAY)
+    body_font    = Font(size=10, color=DARK)
+    lbl_font     = Font(size=7, color=GRAY)
+    val_font     = Font(size=18, bold=True, color=DARK)
+    thin = Side(style="thin", color=LIGHT)
+    card_border = Border(left=thin, right=thin, bottom=thin)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Overview"
+
+    for col, w in zip("ABCDE", [22, 20, 20, 20, 20]):
+        ws.column_dimensions[col].width = w
+    ws.column_dimensions["F"].width = 2
+    ws.column_dimensions["G"].width = 2
+
+    # Row 1: banner
+    ws.merge_cells("A1:E1")
+    for c in range(1, 6):
+        ws.cell(row=1, column=c).fill = title_fill
+    t = ws.cell(row=1, column=1, value=f"Executive Overview — {active_program} Program")
+    t.font = title_font
+    t.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[1].height = 32
+
+    ws.cell(row=2, column=1, value=f"Exported {exported_at} by {user_email}").font = meta_font
+    ws.cell(row=3, column=1, value=f"Data last updated {last_sync_time}").font = meta_font
+
+    # Rows 5–8: KPI cards
+    for c in range(1, 6):
+        ws.cell(row=5, column=c).fill = PatternFill("solid", fgColor=RED)
+    ws.row_dimensions[5].height = 4
+
+    kpi_labels = ["TOTAL STUDENTS", "ON-TIME GRAD RATE", "OVERALL COMPLETION",
+                  "REMAINING STUDENTS", "STUDENTS AT RISK"]
+    for i, l in enumerate(kpi_labels):
+        c = ws.cell(row=6, column=i + 1, value=l)
+        c.font = lbl_font
+        c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        c.border = card_border
+    ws.row_dimensions[6].height = 16
+
+    grad_yes = int(total_students * on_time_rate / 100) if total_students else 0
+    kpi_vals = [total_students, f"{on_time_rate:.1f}%", f"{completion_rate}%",
+                remaining_students, at_risk_count]
+    for i, v in enumerate(kpi_vals):
+        c = ws.cell(row=7, column=i + 1, value=v)
+        c.font = val_font
+        c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        c.border = card_border
+    ws.row_dimensions[7].height = 30
+
+    kpi_hints = [
+        (str(active_cohort), GRAY),
+        (f"\u2191 {grad_yes} of {total_students} students", "10B981"),
+        (f"\u2191 {fully_completed} of {total_students} students", "10B981"),
+        (f"\u2191 {remaining_students} of {total_students} students", "10B981"),
+        (f"\u2191 {at_risk_count} of {total_students} students", RED),
+    ]
+    for i, (h, color) in enumerate(kpi_hints):
+        c = ws.cell(row=8, column=i + 1, value=h)
+        c.font = Font(size=7.5, color=color)
+        c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        c.border = card_border
+    ws.row_dimensions[8].height = 16
+
+    # ---- Table 1: Lifecycle (rows 10-15) ----
+    ws.cell(row=10, column=1, value="COHORT DISTRIBUTION BY LIFECYCLE STAGE").font = section_font
+    ws.row_dimensions[10].height = 22
+    for col, txt in [(1, "Stage"), (2, "% of Active Students")]:
+        c = ws.cell(row=11, column=col, value=txt)
+        c.fill, c.font = head_fill, head_font
+        c.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[11].height = 20
+    for i, (label, pct) in enumerate([
+        ("Coursework",         cw_pct),
+        ("Comprehensive Exam", ce_pct),
+        ("Capstone",           cap_pct),
+        ("Overall Completion", ov_pct),
+    ]):
+        r = 12 + i
+        ws.cell(row=r, column=1, value=label).font = body_font
+        c = ws.cell(row=r, column=2, value=pct / 100)
+        c.font = body_font
+        c.number_format = "0.00%"
+        c.alignment = Alignment(horizontal="center")
+
+    # ---- Table 2: Overall Completion % — Trend (rows 17-23) ----
+    ws.cell(row=17, column=1,
+            value="OVERALL COMPLETION % — TREND (LAST 4 COHORTS)").font = section_font
+    ws.row_dimensions[17].height = 22
+    for col, txt in [(1, "Cohort"), (2, "Overall Completion %")]:
+        c = ws.cell(row=18, column=col, value=txt)
+        c.fill, c.font = head_fill, head_font
+        c.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[18].height = 20
+    for i, (coh, rate) in enumerate(zip(cohorts, comp_rates)):
+        r = 19 + i
+        ws.cell(row=r, column=1, value=coh).font = body_font
+        c = ws.cell(row=r, column=2, value=rate / 100)
+        c.font = body_font
+        c.number_format = "0.0%"
+        c.alignment = Alignment(horizontal="center")
+
+    # ---- Table 3: On-Time Grad Rate — Trend (rows 25-31) ----
+    ws.cell(row=25, column=1,
+            value="ON-TIME GRADUATION RATE — TREND (LAST 4 COHORTS)").font = section_font
+    ws.row_dimensions[25].height = 22
+    for col, txt in [(1, "Cohort"), (2, "On-Time Grad Rate")]:
+        c = ws.cell(row=26, column=col, value=txt)
+        c.fill, c.font = head_fill, head_font
+        c.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[26].height = 20
+    for i, (coh, rate) in enumerate(zip(cohorts, on_time_rates)):
+        r = 27 + i
+        ws.cell(row=r, column=1, value=coh).font = body_font
+        c = ws.cell(row=r, column=2, value=rate / 100)
+        c.font = body_font
+        c.number_format = "0.0%"
+        c.alignment = Alignment(horizontal="center")
+
+    # ---------- Charts stacked in right panel ----------
+    def _buf(fig):
+        b = io.BytesIO()
+        fig.savefig(b, format="png", bbox_inches="tight", facecolor="white", dpi=140)
+        plt.close(fig); b.seek(0)
+        return b
+
+    def _chart_lifecycle():
+        fig, ax = plt.subplots(figsize=(5.6, 2.3))
+        stages_bu = ["Overall Completion", "Capstone", "Comprehensive Exam", "Coursework"]
+        vals_bu = [ov_pct, cap_pct, ce_pct, cw_pct]
+        bars = ax.barh(stages_bu, vals_bu,
+                       color=["#0DC249", "#D50000", "#FFAE00", "#0072B2"], height=0.55)
+        for b, v in zip(bars, vals_bu):
+            ax.text(v + 2, b.get_y() + b.get_height() / 2, f"{v:.2f}%",
+                    va="center", ha="left", fontsize=9, color="#333333")
+        ax.set_xlim(0, 100)
+        ax.set_xlabel("Percentage of Active Students", fontsize=9, color="#666666")
+        ax.set_title("Lifecycle Stage Breakdown", fontsize=11,
+                     fontweight="bold", color="#1F2937")
+        ax.tick_params(labelsize=9)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.grid(axis="x", linestyle=":", alpha=0.3)
+        ax.set_axisbelow(True)
+        plt.tight_layout()
+        return fig
+
+    def _chart_trend(y_vals, line_color, marker_color, title, ylabel):
+        fig, ax = plt.subplots(figsize=(5.6, 2.3))
+        if cohorts:
+            ax.plot(cohorts, y_vals, color=line_color, linewidth=2,
+                    marker="o", markerfacecolor=marker_color,
+                    markeredgecolor=marker_color, markersize=9)
+            for x, y in zip(cohorts, y_vals):
+                ax.annotate(f"{y:.1f}%", (x, y), textcoords="offset points",
+                            xytext=(0, 9), ha="center", fontsize=9, color="#333333")
+        ax.set_ylim(0, 100)
+        ax.set_ylabel(ylabel, fontsize=9, color="#666666")
+        ax.set_title(title, fontsize=11, fontweight="bold", color="#1F2937")
+        ax.tick_params(labelsize=9)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.grid(axis="y", linestyle=":", alpha=0.3)
+        ax.set_axisbelow(True)
+        plt.tight_layout()
+        return fig
+
+    imgA = XLImage(_buf(_chart_lifecycle()))
+    imgA.width, imgA.height = 620, 260
+    ws.add_image(imgA, "G5")
+
+    if cohorts:
+        imgB = XLImage(_buf(_chart_trend(
+            comp_rates, "#0072B2", "#FFAE00",
+            "Overall Completion % — Trend", "Overall Completion (%)")))
+        imgB.width, imgB.height = 620, 260
+        ws.add_image(imgB, "G16")
+
+        imgC = XLImage(_buf(_chart_trend(
+            on_time_rates, "#D50000", "#FFAE00",
+            "On-Time Graduation Rate — Trend", "On-Time Grad Rate (%)")))
+        imgC.width, imgC.height = 620, 260
+        ws.add_image(imgC, "G27")
+
+    # ---------- Sheet 2: At-Risk Students ----------
+    ws2 = wb.create_sheet("At-Risk Students")
+    at_risk_df = _build_at_risk_export_df(df_summary)
+    if at_risk_df.empty:
+        ws2.cell(row=1, column=1, value="No students currently flagged as at-risk.")
+    else:
+        for ci, cn in enumerate(at_risk_df.columns, start=1):
+            c = ws2.cell(row=1, column=ci, value=cn)
+            c.fill, c.font = head_fill, head_font
+            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws2.row_dimensions[1].height = 32
+        for ri, (_, row) in enumerate(at_risk_df.iterrows(), start=2):
+            for ci, cn in enumerate(at_risk_df.columns, start=1):
+                v = row[cn]
+                ws2.cell(row=ri, column=ci, value="" if pd.isna(v) else v)
+        for ci, cn in enumerate(at_risk_df.columns, start=1):
+            max_len = max([len(str(cn))] + [len(str(v)) for v in at_risk_df[cn].astype(str)])
+            ws2.column_dimensions[get_column_letter(ci)].width = min(max_len + 2, 50)
+
+    wb.save(buf)
+    return buf.getvalue()
+
+# ------------------------------------------------------------------
 # VIEW 1: STUDENT ROSTER (Dashboard)
 # ------------------------------------------------------------------
 def render_student_list(df_all):
@@ -1283,7 +2198,21 @@ def render_student_list(df_all):
         completion_rate = int((fully_completed / total_students * 100)) if total_students > 0 else 0
 
         remaining_students = int(total_students - fully_completed)
-        at_risk_count = int(df_summary["is_at_risk"].sum()) # Calculated here first
+        at_risk_count = int(df_summary["is_at_risk"].sum())
+
+        # --- Current stage buckets (mutually exclusive) — used by chart AND exports ---
+        current_cw = len(df_summary[df_summary["coursework_display"] != "Completed"])
+
+        current_ce = len(df_summary[
+            (df_summary["coursework_display"] == "Completed") &
+            (df_summary["comprehensive_exam_display"] != "Passed")
+        ])
+
+        current_cap = len(df_summary[
+            (df_summary["coursework_display"] == "Completed") &
+            (df_summary["comprehensive_exam_display"] == "Passed") &
+            (df_summary["capstone_display"] != "Defended")
+        ])
 
         # --- TERM-OVER-TERM COMPARISON LOGIC ---
         all_cohorts_sorted = sorted([str(c) for c in df_all["cohort"].dropna().unique() if str(c).strip()], key=get_cohort_val)
@@ -1386,32 +2315,19 @@ def render_student_list(df_all):
         display_cohort_delta = "All Cohorts" if active_cohort == "All" else f"Cohort: {active_cohort}"
         
         m1.metric(label="Total Students", value=total_students, delta=display_cohort_delta, delta_color="off", help="Total students matching filters.")
-        m2.metric(label="On-Time Grad Rate", value=f"{on_time_rate:.1f}%", delta=grad_delta_str, delta_color=grad_color_mode)
-        m3.metric(label="Overall Completion", value=f"{completion_rate}%", delta=comp_delta_str, delta_color=comp_color_mode)
-        m4.metric(label="Remaining Students", value=remaining_students, delta=rem_delta_str, delta_color=rem_color_mode)
+        m2.metric(label="On-Time Grad Rate", value=f"{on_time_rate:.1f}%", delta=grad_delta_str, delta_color=grad_color_mode, help="Percentage of students on track to graduate within expected program duration.")
+        m3.metric(label="Overall Completion", value=f"{completion_rate}%", delta=comp_delta_str, delta_color=comp_color_mode, help="Percentage of students who have fully completed coursework, comprehensive exam, and capstone.")
+        m4.metric(label="Remaining Students", value=remaining_students, delta=rem_delta_str, delta_color=rem_color_mode, help="Students who have not yet completed all three major milestones.")
         m5.metric(label="Students At Risk", value=at_risk_count, delta=risk_delta_str, delta_color=risk_color_mode, help="Students who have exceeded expected duration thresholds.")
         
         st.write("")
-        
+
+
         col1, col2 = st.columns(2)
 
         with col1:
             with st.container(border=True): 
                 st.subheader("Lifecycle Stage Breakdown", help="Distribution of students across their current active lifecycle stage.")
-
-                # 1. Mutually Exclusive Current Stage Logic
-                current_cw = len(df_summary[df_summary["coursework_display"] != "Completed"])
-                
-                current_ce = len(df_summary[
-                    (df_summary["coursework_display"] == "Completed") & 
-                    (df_summary["comprehensive_exam_display"] != "Passed")
-                ])
-                
-                current_cap = len(df_summary[
-                    (df_summary["coursework_display"] == "Completed") & 
-                    (df_summary["comprehensive_exam_display"] == "Passed") & 
-                    (df_summary["capstone_display"] != "Defended")
-                ])
 
                 # Build the chart data using the strict buckets
                 stage_df = pd.DataFrame({
@@ -1514,6 +2430,60 @@ def render_student_list(df_all):
             else:
                 display_filtered_df = format_for_grid(filtered_full_df.sort_values("full_name").reset_index(drop=True))
                 render_roster_grid(display_filtered_df, key_prefix="dynamic_roster")
+
+                        # --- Export Row (PDF + XLSX) ---
+        st.write("")
+        exp_pdf_bytes = generate_executive_pdf(
+            df_summary, df_all, summary_label, selected_adviser,
+            total_students, on_time_rate, completion_rate, remaining_students,
+            at_risk_count, fully_completed, current_cap, current_ce, current_cw,
+            user["full_name"] or user["username"], ACTIVE_PROGRAM, last_sync
+        )
+        exp_xlsx_bytes = generate_executive_xlsx(
+            df_summary, df_all, summary_label, selected_adviser,
+            total_students, on_time_rate, completion_rate, remaining_students,
+            at_risk_count, fully_completed, current_cap, current_ce, current_cw,
+            user["full_name"] or user["username"], ACTIVE_PROGRAM, last_sync
+        )
+
+        _stamp = datetime.now(ZoneInfo("Asia/Manila")).strftime("%Y%m%d_%H%M")
+        _safe_prog = re.sub(r"[^A-Za-z0-9]+", "_", ACTIVE_PROGRAM)
+        _safe_cohort = re.sub(r"[^A-Za-z0-9]+", "_", str(summary_label))
+
+        def _log_pdf_export():
+            log_security_event(
+                user["user_id"], "DATA_EXPORT",
+                f"Exported Executive PDF ({summary_label} | Adviser: {selected_adviser})."
+            )
+
+        def _log_xlsx_export():
+            log_security_event(
+                user["user_id"], "DATA_EXPORT",
+                f"Exported Executive XLSX ({summary_label} | Adviser: {selected_adviser})."
+            )
+
+        exp_c1, exp_c2, exp_c3 = st.columns([1.2, 1.2, 5])
+        with exp_c1:
+            st.download_button(
+                "📄 Export PDF Report",
+                data=exp_pdf_bytes,
+                file_name=f"{_safe_prog}_executive_overview_{_safe_cohort}_{_stamp}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+                key="exec_export_pdf",
+                on_click=_log_pdf_export,
+            )
+        with exp_c2:
+            st.download_button(
+                "📊 Export XLSX",
+                data=exp_xlsx_bytes,
+                file_name=f"{_safe_prog}_executive_overview_{_safe_cohort}_{_stamp}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="exec_export_xlsx",
+                on_click=_log_xlsx_export,
+            )
+        exp_c3.empty()
 
         # -- Dashboard Risk Table --
         st.divider()
@@ -1831,7 +2801,42 @@ def render_student_profile(df_all):
                     
                 except Exception as err:
                     st.error(f"Write operation failed: {err}")
+    # ------------------------------------------------------------------
+    # Download PDF Summary
+    # ------------------------------------------------------------------
+    st.divider()
+    st.markdown("##### 📄 Export Profile Summary")
 
+    try:
+        pdf_bytes = generate_student_pdf(
+            student, milestones_df,
+            cw_updated, ce_updated, cap_updated,
+            user["full_name"] or user["username"],
+            ACTIVE_PROGRAM, last_sync,
+        )
+
+        _safe_name = re.sub(r"[^A-Za-z0-9]+", "_",
+                            str(student.get("full_name", "student"))).strip("_")
+        _stamp = datetime.now(ZoneInfo("Asia/Manila")).strftime("%Y%m%d_%H%M")
+
+        def _log_profile_export():
+            log_security_event(
+                user["user_id"], "DATA_EXPORT",
+                f"Exported Student Profile PDF for {student.get('full_name')} "
+                f"(ID {student.get('student_number')})."
+            )
+
+        st.download_button(
+            "📄 Download PDF Summary",
+            data=pdf_bytes,
+            file_name=f"{_safe_name}_profile_{_stamp}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+            key=f"student_profile_pdf_{student.get('student_number', 'x')}",
+            on_click=_log_profile_export,
+        )
+    except Exception as e:
+        st.warning(f"Could not generate the student PDF summary: {e}")
 # ------------------------------------------------------------------
 # FOOTER HELPER
 # ------------------------------------------------------------------
