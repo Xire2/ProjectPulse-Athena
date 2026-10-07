@@ -678,7 +678,7 @@ def render_add_data():
     summary_col3.metric("Warnings", len(st.session_state.get("import_warnings", [])))
     summary_col4.metric("Errors", len(st.session_state.get("import_errors", [])))
 
-     st.markdown("### Data Preview & Editor")
+    st.markdown("### Data Preview & Editor")
 
     display_df = preview_df.drop(columns=["__issue_cells"], errors="ignore")
     
