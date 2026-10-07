@@ -12,10 +12,9 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import re
 import os
-
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, JsCode
 # Generic title
 st.set_page_config(page_title="Project Pulse — Program Dashboard", page_icon="🎓", layout="wide")
-
 # ------------------------------------------------------------------
 # ETHICAL VISUALIZATION SPECIFICATION & THRESHOLDS
 # ------------------------------------------------------------------
@@ -108,7 +107,6 @@ def overall_status(row) -> str:
     elif coursework == "COMPLETED": return "Graduated"
     elif coursework == "CANCELLED": return "Cancelled"
     return "Unknown"
-
 # ------------------------------------------------------------------
 # DATABASE & AUDIT LOGGING
 # ------------------------------------------------------------------
@@ -220,7 +218,6 @@ def format_term_label(term_code):
 
     return f"{term_period}, A.Y. {start_full_year}–{end_full_year}"
 
-
 def get_current_term():
     """
     Determines the current academic term from the term table.
@@ -261,6 +258,853 @@ def get_current_term():
         return None
 
     return current_term_df.iloc[0]
+```python
+# ------------------------------------------------------------------
+# ADD DATA / IMPORT HELPERS
+# ------------------------------------------------------------------
+
+IMPORT_REQUIRED_FIELDS = ["student_number"]
+
+IMPORT_FIELD_ALIASES = {
+    "student_number": ["student number", "student_number", "student id", "student_id", "id number", "student no"],
+    "student_email": ["student email", "email", "email address", "student_email"],
+    "first_name": ["first", "first name", "firstname", "first_name"],
+    "last_name": ["last", "last name", "lastname", "last_name"],
+    "cohort": ["cohort", "cohort code", "cohort_code"],
+    "adviser": ["adviser", "advisor", "primary adviser", "primary advisor"],
+    "coursework_status": ["coursework status", "coursework_status"],
+    "comprehensive_exam": ["comprehensive exam", "comprehensive exam status", "comprehensive_exam", "comprehensive_exam_status"],
+    "capstone": ["capstone", "capstone/thesis", "capstone status", "capstone_status", "capstone/thesis status"],
+    "graduate_on_time": ["graduate on time", "graduated on time", "graduate_on_time"],
+    "graduate_date_term_sy": ["graduate date (term/sy)", "graduate date", "graduation date", "graduation term", "graduate_date_term_sy"],
+    "remarks": ["remarks", "remark", "notes", "comments"]
+}
+
+COURSE_STATUS_MAP = {
+    "done": "done",
+    "completed": "done",
+    "complete": "done",
+    "passed": "done",
+    "in current load": "in current load",
+    "pending": "pending",
+    "cancelled": "cancelled",
+    "canceled": "cancelled",
+    "incomplete": "incomplete",
+    "not yet taken": "not yet taken",
+    "not yet done": "not yet done",
+    "n/a": None,
+    "na": None,
+    "": None
+}
+
+LIFECYCLE_STATUS_MAP = {
+    "coursework": {
+        "pending": "pending",
+        "completed": "done",
+        "done": "done",
+        "cancelled": "cancelled",
+        "canceled": "cancelled",
+        "incomplete": "incomplete",
+        "not yet taken": "not yet taken",
+        "in current load": "in current load"
+    },
+    "comprehensive_exam": {
+        "in-progress": "not yet taken",
+        "in progress": "not yet taken",
+        "passed": "done",
+        "done": "done",
+        "incomplete": "incomplete",
+        "not yet taken": "not yet taken"
+    },
+    "capstone": {
+        "in-progress": "not yet done",
+        "in progress": "not yet done",
+        "defended": "done",
+        "done": "done",
+        "incomplete": "incomplete",
+        "not yet done": "not yet done",
+        "not yet taken": "not yet taken"
+    }
+}
+def normalize_import_header(value):
+    if value is None or pd.isna(value):
+        return ""
+    value = str(value).strip().lower()
+    value = re.sub(r"[\n\r]+", " ", value)
+    value = re.sub(r"[_\-]+", " ", value)
+    value = re.sub(r"\s+", " ", value)
+    return value.strip()
+
+def detect_import_columns(columns):
+    detected = {}
+    normalized_columns = {column: normalize_import_header(column) for column in columns}
+
+    for db_field, aliases in IMPORT_FIELD_ALIASES.items():
+        normalized_aliases = {normalize_import_header(alias) for alias in aliases}
+        for original, normalized in normalized_columns.items():
+            if normalized in normalized_aliases:
+                detected[db_field] = original
+                break
+
+    return detected
+
+def detect_course_columns(columns):
+    non_course_columns = {normalize_import_header(value) for aliases in IMPORT_FIELD_ALIASES.values() for value in aliases}
+    course_columns = []
+
+    for column in columns:
+        normalized = normalize_import_header(column)
+        if normalized in non_course_columns:
+            continue
+
+        compact = re.sub(r"[^A-Z0-9]", "", str(column).upper())
+
+        if re.fullmatch(r"[A-Z]{2,5}\d{3}", compact):
+            course_columns.append(column)
+
+    return course_columns
+
+def read_import_file(uploaded_file):
+    try:
+        file_name = uploaded_file.name.lower()
+
+        if file_name.endswith(".csv"):
+            return pd.read_csv(uploaded_file, dtype=object)
+
+        if file_name.endswith(".xlsx") or file_name.endswith(".xls"):
+            return pd.read_excel(uploaded_file, dtype=object)
+
+        raise ValueError("Only CSV and Excel files are supported.")
+
+    except Exception as e:
+        raise ValueError(f"Could not read the uploaded file: {e}")
+
+def clean_import_dataframe(df):
+    df = df.copy()
+    df.columns = [str(column).strip() if str(column).strip() else f"Unnamed Column {index + 1}" for index, column in enumerate(df.columns)]
+    df = df.dropna(how="all").reset_index(drop=True)
+
+    for column in df.columns:
+        df[column] = df[column].apply(lambda value: None if pd.isna(value) or str(value).strip().lower() in ("nan", "none") else value)
+
+    return df
+
+def get_issue_cell_style():
+    return JsCode("""
+    function(params) {
+        if (params.data && params.data.__issue_cells) {
+            var issues = params.data.__issue_cells;
+            if (issues.indexOf(params.colDef.field) !== -1) {
+                return {
+                    backgroundColor: '#FFF3CD',
+                    color: '#856404',
+                    fontWeight: '600',
+                    border: '2px solid #FFAE00'
+                };
+            }
+        }
+        return {};
+    }
+    """)
+
+def get_import_grid_options(focus_row=None, focus_column=None):
+    focus_row = int(focus_row) if focus_row is not None else -1
+    focus_column = json.dumps(str(focus_column)) if focus_column else "null"
+
+    on_grid_ready = JsCode(f"""
+    function(params) {{
+        window.setTimeout(function() {{
+            var rowIndex = {focus_row};
+            var columnName = {focus_column};
+
+            if (rowIndex >= 0) {{
+                params.api.ensureIndexVisible(rowIndex, 'middle');
+
+                if (columnName) {{
+                    params.api.setFocusedCell(rowIndex, columnName);
+                }}
+            }}
+        }}, 250);
+    }}
+    """)
+
+    gb = GridOptionsBuilder.from_dataframe(st.session_state.import_preview_df)
+
+    gb.configure_default_column(editable=True, resizable=True, sortable=True, filter=True, wrapText=False, autoHeight=False)
+    gb.configure_grid_options(onGridReady=on_grid_ready, stopEditingWhenCellsLoseFocus=True, rowSelection="single")
+
+    for column in st.session_state.import_preview_df.columns:
+        if column != "__issue_cells":
+            gb.configure_column(column, editable=True, cellStyle=get_issue_cell_style())
+
+    gb.configure_column("__issue_cells", hide=True)
+
+    return gb.build()
+
+
+def validate_import_dataframe(df, detected_columns, course_columns):
+    warnings = []
+    errors = []
+    working_df = df.copy()
+    working_df["__issue_cells"] = [[] for _ in range(len(working_df))]
+
+    def add_issue(row_index, column, severity, message):
+        issue = {
+            "row": int(row_index) + 2,
+            "student_number": str(working_df.iloc[row_index].get(detected_columns.get("student_number", ""), "")),
+            "column": str(column),
+            "current_value": working_df.iloc[row_index].get(column, ""),
+            "severity": severity,
+            "message": message,
+            "row_index": int(row_index)
+        }
+
+        if severity == "Error":
+            errors.append(issue)
+        else:
+            warnings.append(issue)
+
+        if column in working_df.columns:
+            working_df.at[row_index, "__issue_cells"].append(column)
+
+    student_column = detected_columns.get("student_number")
+
+    if not student_column:
+        errors.append({
+            "row": "—",
+            "student_number": "—",
+            "column": "Student Number",
+            "current_value": "Missing column",
+            "severity": "Error",
+            "message": "A student number column could not be detected.",
+            "row_index": None
+        })
+    else:
+        for index, value in working_df[student_column].items():
+            if value is None or str(value).strip() == "":
+                add_issue(index, student_column, "Error", "Student number is required.")
+
+    warning_fields = {
+        "adviser": "Missing adviser.",
+        "graduate_date_term_sy": "Missing graduation date/term.",
+        "capstone": "Missing capstone status.",
+        "student_email": "Missing student email.",
+        "cohort": "Missing cohort.",
+        "remarks": "Missing remarks."
+    }
+
+    for field, message in warning_fields.items():
+        column = detected_columns.get(field)
+
+        if not column:
+            continue
+
+        for index, value in working_df[column].items():
+            if value is None or str(value).strip() == "":
+                add_issue(index, column, "Warning", message)
+
+    status_fields = {
+        "coursework_status": COURSE_STATUS_MAP,
+        "comprehensive_exam": LIFECYCLE_STATUS_MAP["comprehensive_exam"],
+        "capstone": LIFECYCLE_STATUS_MAP["capstone"]
+    }
+
+    for field, mapping in status_fields.items():
+        column = detected_columns.get(field)
+
+        if not column:
+            continue
+
+        for index, value in working_df[column].items():
+            if value is None or str(value).strip() == "":
+                continue
+
+            clean_value = str(value).strip().lower()
+
+            if clean_value not in mapping:
+                add_issue(index, column, "Error", f"Unrecognized {field.replace('_', ' ')} status.")
+
+    return working_df, warnings, errors
+
+def refresh_import_validation():
+    detected_columns = st.session_state.get("import_detected_columns", {})
+    course_columns = st.session_state.get("import_course_columns", [])
+    preview_df = st.session_state.get("import_preview_df")
+
+    if preview_df is None:
+        return
+
+    clean_df = preview_df.drop(columns=["__issue_cells"], errors="ignore").copy()
+    validated_df, warnings, errors = validate_import_dataframe(clean_df, detected_columns, course_columns)
+
+    st.session_state.import_preview_df = validated_df
+    st.session_state.import_warnings = warnings
+    st.session_state.import_errors = errors
+
+def render_import_issue_list():
+    warnings = st.session_state.get("import_warnings", [])
+    errors = st.session_state.get("import_errors", [])
+    issues = errors + warnings
+
+    if not issues:
+        st.success("✓ No validation issues detected.")
+        return
+
+    st.markdown("### Issues Requiring Attention")
+
+    issue_df = pd.DataFrame([
+        {
+            "Severity": issue["severity"],
+            "Row": issue["row"],
+            "Student Number": issue["student_number"],
+            "Column": issue["column"],
+            "Current Value": "Blank" if issue["current_value"] is None or str(issue["current_value"]).strip() == "" else str(issue["current_value"]),
+            "Issue": issue["message"]
+        }
+        for issue in issues
+    ])
+
+    if not issue_df.empty:
+        st.dataframe(issue_df, hide_index=True, use_container_width=True)
+
+    for index, issue in enumerate(issues):
+        severity_icon = "🔴" if issue["severity"] == "Error" else "⚠️"
+        issue_col1, issue_col2 = st.columns([6, 1])
+
+        with issue_col1:
+            st.markdown(f"{severity_icon} **Row {issue['row']} · {issue['column']}** — {issue['message']}")
+
+        with issue_col2:
+            if issue["row_index"] is not None:
+                if st.button("✏️ Edit", key=f"import_issue_edit_{index}_{issue['row_index']}_{issue['column']}", use_container_width=True):
+                    st.session_state.import_focus_row = issue["row_index"]
+                    st.session_state.import_focus_column = issue["column"]
+                    st.rerun()
+
+def render_add_data():
+    st.subheader("➕ Add Data")
+    st.caption("Import or manually enter student academic records. Imported records are assigned to the selected academic term.")
+
+    if not user.get("can_import", False):
+        log_security_event(user["user_id"], "UNAUTHORIZED_IMPORT_ACCESS", "User attempted to access Add Data without import permission.")
+        st.error("⛔ You do not have permission to add or import data.")
+        return
+
+    available_terms_df = load_available_terms()
+    current_term = get_current_term()
+
+    if available_terms_df.empty:
+        st.error("No academic terms are currently available.")
+        return
+
+    term_options = available_terms_df["term_id"].tolist()
+
+    if "import_term_id" not in st.session_state:
+        st.session_state.import_term_id = int(current_term["term_id"]) if current_term is not None else int(term_options[0])
+
+    if st.session_state.import_term_id not in term_options:
+        st.session_state.import_term_id = int(current_term["term_id"]) if current_term is not None else int(term_options[0])
+
+    selected_import_term_id = st.selectbox(
+        "Academic Term",
+        options=term_options,
+        index=term_options.index(st.session_state.import_term_id),
+        format_func=lambda term_id: format_term_label(available_terms_df.loc[available_terms_df["term_id"] == term_id, "term_code"].iloc[0]),
+        key="import_term_selector"
+    )
+
+    st.session_state.import_term_id = selected_import_term_id
+
+    st.info("The selected academic term will automatically be assigned to all term-specific records created by this import.")
+
+    import_method = st.radio("Add Data Method", ["Import File", "Manual Data Entry"], horizontal=True, key="import_method")
+
+    if import_method == "Import File":
+        uploaded_file = st.file_uploader("Upload CSV or Excel file", type=["csv", "xlsx", "xls"], key="student_import_file")
+
+        if uploaded_file is not None:
+            if st.session_state.get("import_loaded_file") != uploaded_file.name:
+                try:
+                    raw_df = clean_import_dataframe(read_import_file(uploaded_file))
+                    detected_columns = detect_import_columns(raw_df.columns)
+                    course_columns = detect_course_columns(raw_df.columns)
+                    validated_df, warnings, errors = validate_import_dataframe(raw_df, detected_columns, course_columns)
+
+                    st.session_state.import_loaded_file = uploaded_file.name
+                    st.session_state.import_preview_df = validated_df
+                    st.session_state.import_detected_columns = detected_columns
+                    st.session_state.import_course_columns = course_columns
+                    st.session_state.import_warnings = warnings
+                    st.session_state.import_errors = errors
+                    st.session_state.import_focus_row = None
+                    st.session_state.import_focus_column = None
+
+                except Exception as e:
+                    st.error(str(e))
+                    return
+
+    else:
+        if "import_manual_df" not in st.session_state:
+            st.session_state.import_manual_df = pd.DataFrame(columns=["student_number", "student_email", "first_name", "last_name", "cohort", "adviser", "coursework_status", "comprehensive_exam", "capstone", "graduate_on_time", "graduate_date_term_sy", "remarks"])
+
+        st.session_state.import_preview_df = st.data_editor(
+            st.session_state.import_manual_df,
+            num_rows="dynamic",
+            use_container_width=True,
+            height=400,
+            key="manual_import_editor"
+        )
+
+        if st.button("Validate Manual Data", type="secondary"):
+            st.session_state.import_detected_columns = {column: column for column in st.session_state.import_preview_df.columns if column in IMPORT_FIELD_ALIASES}
+            st.session_state.import_course_columns = []
+            refresh_import_validation()
+            st.rerun()
+
+    preview_df = st.session_state.get("import_preview_df")
+
+    if preview_df is None:
+        return
+
+    st.divider()
+
+    detected_columns = st.session_state.get("import_detected_columns", {})
+    course_columns = st.session_state.get("import_course_columns", [])
+
+    st.markdown("### Import Summary")
+
+    summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
+
+    summary_col1.metric("Students Detected", len(preview_df))
+    summary_col2.metric("Course Columns", len(course_columns))
+    summary_col3.metric("Warnings", len(st.session_state.get("import_warnings", [])))
+    summary_col4.metric("Errors", len(st.session_state.get("import_errors", [])))
+
+    st.markdown("### Data Preview & Editor")
+
+    focus_row = st.session_state.get("import_focus_row")
+    focus_column = st.session_state.get("import_focus_column")
+
+    grid_options = get_import_grid_options(focus_row, focus_column)
+
+    grid_result = AgGrid(
+        preview_df,
+        gridOptions=grid_options,
+        update_mode=GridUpdateMode.VALUE_CHANGED,
+        allow_unsafe_jscode=True,
+        fit_columns_on_grid_load=False,
+        height=450,
+        theme="streamlit",
+        key="import_main_datasheet"
+    )
+
+    edited_df = grid_result["data"]
+
+    if edited_df is not None:
+        edited_df = edited_df.copy()
+
+        if "__issue_cells" not in edited_df.columns:
+            edited_df["__issue_cells"] = [[] for _ in range(len(edited_df))]
+
+        st.session_state.import_preview_df = edited_df
+
+    st.caption("You may edit any cell. Highlighted cells correspond to detected warnings or errors.")
+
+    st.divider()
+
+    render_import_issue_list()
+
+    st.divider()
+
+    current_errors = st.session_state.get("import_errors", [])
+
+    if current_errors:
+        st.error(f"🔴 {len(current_errors)} error(s) must be fixed before the import can be finalized.")
+    else:
+        st.success("✓ No blocking errors. Warnings may remain if the missing information is intentional.")
+
+    finalize_col1, finalize_col2 = st.columns(2)
+
+    with finalize_col1:
+        if st.button("Revalidate Data", use_container_width=True):
+            refresh_import_validation()
+            st.rerun()
+
+    with finalize_col2:
+        finalize_disabled = bool(current_errors)
+
+        if st.button("Finalize Import", type="primary", use_container_width=True, disabled=finalize_disabled):
+            finalize_import_to_database()
+```
+def finalize_import_to_database():
+    preview_df = st.session_state.get("import_preview_df")
+    if preview_df is None or preview_df.empty:
+        st.error("There is no data to import.")
+        return
+
+    term_id = st.session_state.get("import_term_id")
+    if term_id is None:
+        st.error("Please select an academic term before importing.")
+        return
+
+    errors = st.session_state.get("import_errors", [])
+    if errors:
+        st.error(f"Import blocked. Please fix {len(errors)} error(s) first.")
+        return
+
+    detected_columns = st.session_state.get("import_detected_columns", {})
+    course_columns = st.session_state.get("import_course_columns", [])
+
+    term_lookup_df = load_available_terms()
+    if term_lookup_df.empty:
+        st.error("Unable to find the selected academic term.")
+        return
+
+    matching_term = term_lookup_df[term_lookup_df["term_id"] == term_id]
+    if matching_term.empty:
+        st.error("The selected academic term is no longer available.")
+        return
+
+    selected_term_code = matching_term.iloc[0]["term_code"]
+    import_date = datetime.now(ZoneInfo("Asia/Manila")).date()
+
+    try:
+        with conn.session as s:
+            imported_students = 0
+            imported_courses = 0
+            imported_lifecycle = 0
+            updated_students = 0
+
+            def clean_value(value):
+                if pd.isna(value):
+                    return None
+                value = str(value).strip()
+                return None if value == "" or value.lower() in {"nan", "none", "n/a", "na"} else value
+
+            program_result = s.execute(
+                text("SELECT program_id FROM program WHERE program_code = :program_code LIMIT 1;"),
+                {"program_code": ACTIVE_PROGRAM}
+            ).fetchone()
+
+            if not program_result:
+                raise ValueError(f"Program '{ACTIVE_PROGRAM}' was not found in the program table.")
+
+            program_id = program_result[0]
+
+            for _, row in preview_df.iterrows():
+                student_number = row.get(detected_columns.get("student_number", "student_number"))
+
+                if pd.isna(student_number) or str(student_number).strip() == "":
+                    continue
+
+                try:
+                    student_number = int(float(student_number))
+                except Exception:
+                    continue
+
+                student_email = clean_value(row.get(detected_columns.get("student_email", "student_email")))
+                first_name = clean_value(row.get(detected_columns.get("first_name", "first_name")))
+                last_name = clean_value(row.get(detected_columns.get("last_name", "last_name")))
+                cohort_code = clean_value(row.get(detected_columns.get("cohort", "cohort")))
+                adviser_name = clean_value(row.get(detected_columns.get("adviser", "adviser")))
+                graduate_on_time = clean_value(row.get(detected_columns.get("graduate_on_time", "graduate_on_time")))
+                graduate_date_term_sy = clean_value(row.get(detected_columns.get("graduate_date_term_sy", "graduate_date_term_sy")))
+                remarks = clean_value(row.get(detected_columns.get("remarks", "remarks")))
+
+                graduate_on_time_value = None if graduate_on_time is None else graduate_on_time.lower() in {"yes", "y", "true", "1", "on"}
+
+                cohort_id = None
+                if cohort_code:
+                    cohort_result = s.execute(
+                        text("SELECT cohort_id FROM cohort WHERE cohort_code = :cohort_code LIMIT 1;"),
+                        {"cohort_code": cohort_code}
+                    ).fetchone()
+                    if cohort_result:
+                        cohort_id = cohort_result[0]
+
+                adviser_id = None
+                if adviser_name:
+                    adviser_result = s.execute(
+                        text("""
+                            SELECT adviser_id
+                            FROM advisers
+                            WHERE LOWER(TRIM(full_name)) = LOWER(TRIM(:adviser_name))
+                            LIMIT 1;
+                        """),
+                        {"adviser_name": adviser_name}
+                    ).fetchone()
+                    if adviser_result:
+                        adviser_id = adviser_result[0]
+
+                existing_student = s.execute(
+                    text("SELECT student_number FROM students WHERE student_number = :student_number LIMIT 1;"),
+                    {"student_number": student_number}
+                ).fetchone()
+
+                student_params = {
+                    "student_number": student_number,
+                    "student_email": student_email,
+                    "first_name": first_name,
+                    "last_name": last_name,
+                    "cohort_id": cohort_id,
+                    "adviser_id": adviser_id,
+                    "program_id": program_id,
+                    "graduate_on_time": graduate_on_time_value,
+                    "graduate_date_term_sy": graduate_date_term_sy,
+                    "remarks": remarks
+                }
+
+                if existing_student:
+                    s.execute(
+                        text("""
+                            UPDATE students
+                            SET student_email = :student_email,
+                                first_name = :first_name,
+                                last_name = :last_name,
+                                cohort_id = :cohort_id,
+                                adviser_id = :adviser_id,
+                                program_id = :program_id,
+                                graduate_on_time = :graduate_on_time,
+                                graduate_date_term_sy = :graduate_date_term_sy,
+                                remarks = :remarks
+                            WHERE student_number = :student_number;
+                        """),
+                        student_params
+                    )
+                    updated_students += 1
+                else:
+                    s.execute(
+                        text("""
+                            INSERT INTO students (
+                                student_number, student_email, first_name, last_name,
+                                cohort_id, adviser_id, program_id, graduate_on_time,
+                                graduate_date_term_sy, remarks
+                            )
+                            VALUES (
+                                :student_number, :student_email, :first_name, :last_name,
+                                :cohort_id, :adviser_id, :program_id, :graduate_on_time,
+                                :graduate_date_term_sy, :remarks
+                            );
+                        """),
+                        student_params
+                    )
+                    imported_students += 1
+
+                for course_column in course_columns:
+                    course_code = str(course_column).strip().upper()
+                    cleaned_course_status = clean_value(row.get(course_column))
+
+                    if cleaned_course_status is None:
+                        continue
+
+                    normalized_course_status = COURSE_STATUS_MAP.get(cleaned_course_status.lower())
+                    if normalized_course_status is None:
+                        continue
+
+                    course_exists = s.execute(
+                        text("""
+                            SELECT course_code
+                            FROM courses
+                            WHERE UPPER(course_code) = :course_code
+                            LIMIT 1;
+                        """),
+                        {"course_code": course_code}
+                    ).fetchone()
+
+                    if not course_exists:
+                        continue
+
+                    enrollment_params = {
+                        "student_number": student_number,
+                        "course_code": course_code,
+                        "term_id": term_id,
+                        "status": normalized_course_status
+                    }
+
+                    existing_enrollment = s.execute(
+                        text("""
+                            SELECT 1
+                            FROM student_course_enrollments
+                            WHERE student_number = :student_number
+                              AND UPPER(course_code) = :course_code
+                              AND term_id = :term_id
+                            LIMIT 1;
+                        """),
+                        enrollment_params
+                    ).fetchone()
+
+                    if existing_enrollment:
+                        s.execute(
+                            text("""
+                                UPDATE student_course_enrollments
+                                SET status = :status
+                                WHERE student_number = :student_number
+                                  AND UPPER(course_code) = :course_code
+                                  AND term_id = :term_id;
+                            """),
+                            enrollment_params
+                        )
+                    else:
+                        s.execute(
+                            text("""
+                                INSERT INTO student_course_enrollments (
+                                    student_number, course_code, term_id, status
+                                )
+                                VALUES (
+                                    :student_number, :course_code, :term_id, :status
+                                );
+                            """),
+                            enrollment_params
+                        )
+                        imported_courses += 1
+
+                for stage_name, status_mapping in LIFECYCLE_STATUS_MAP.items():
+                    stage_source_column = {
+                        "coursework": detected_columns.get("coursework_status"),
+                        "comprehensive_exam": detected_columns.get("comprehensive_exam"),
+                        "capstone": detected_columns.get("capstone")
+                    }.get(stage_name)
+
+                    if not stage_source_column:
+                        continue
+
+                    cleaned_stage_status = clean_value(row.get(stage_source_column))
+                    if cleaned_stage_status is None:
+                        continue
+
+                    mapped_status = status_mapping.get(cleaned_stage_status.lower())
+                    if mapped_status is None:
+                        continue
+
+                    stage_result = s.execute(
+                        text("""
+                            SELECT stage_id
+                            FROM lifecycle_stage
+                            WHERE LOWER(stage_name) = LOWER(:stage_name)
+                            LIMIT 1;
+                        """),
+                        {"stage_name": stage_name}
+                    ).fetchone()
+
+                    if not stage_result:
+                        continue
+
+                    stage_id = stage_result[0]
+
+                    status_result = s.execute(
+                        text("""
+                            SELECT status_id
+                            FROM lifecycle_status
+                            WHERE LOWER(status_name) = LOWER(:status_name)
+                            LIMIT 1;
+                        """),
+                        {"status_name": mapped_status}
+                    ).fetchone()
+
+                    if not status_result:
+                        continue
+
+                    status_id = status_result[0]
+
+                    existing_lifecycle = s.execute(
+                        text("""
+                            SELECT student_lifecycle_status_id, status_id, stage_started_date
+                            FROM student_lifecycle_status
+                            WHERE student_number = :student_number
+                              AND stage_id = :stage_id
+                              AND term_id = :term_id
+                            LIMIT 1;
+                        """),
+                        {
+                            "student_number": student_number,
+                            "stage_id": stage_id,
+                            "term_id": term_id
+                        }
+                    ).fetchone()
+
+                    if existing_lifecycle:
+                        s.execute(
+                            text("""
+                                UPDATE student_lifecycle_status
+                                SET status_id = :status_id,
+                                    last_updated_date = NOW()
+                                WHERE student_lifecycle_status_id = :lifecycle_id;
+                            """),
+                            {
+                                "status_id": status_id,
+                                "lifecycle_id": existing_lifecycle[0]
+                            }
+                        )
+                    else:
+                        s.execute(
+                            text("""
+                                INSERT INTO student_lifecycle_status (
+                                    student_number, stage_id, status_id, term_id,
+                                    stage_started_date, stage_started_date_source,
+                                    last_updated_date
+                                )
+                                VALUES (
+                                    :student_number, :stage_id, :status_id, :term_id,
+                                    :stage_started_date, :stage_started_date_source,
+                                    NOW()
+                                );
+                            """),
+                            {
+                                "student_number": student_number,
+                                "stage_id": stage_id,
+                                "status_id": status_id,
+                                "term_id": term_id,
+                                "stage_started_date": import_date,
+                                "stage_started_date_source": "System Assigned"
+                            }
+                        )
+                        imported_lifecycle += 1
+
+            s.commit()
+
+        try:
+            load_students.clear()
+        except Exception:
+            pass
+
+        try:
+            fetch_student_lifecycle.clear()
+        except Exception:
+            pass
+
+        try:
+            fetch_student_courses.clear()
+        except Exception:
+            pass
+
+        try:
+            log_security_event(
+                user["user_id"],
+                "DATA_IMPORT_COMPLETED",
+                f"Imported academic data for term '{selected_term_code}'. New students: {imported_students}; updated students: {updated_students}; courses: {imported_courses}; lifecycle records: {imported_lifecycle}."
+            )
+        except Exception:
+            pass
+
+        for key in [
+            "import_loaded_file", "import_preview_df", "import_detected_columns",
+            "import_course_columns", "import_warnings", "import_errors",
+            "import_focus_row", "import_focus_column", "import_manual_df"
+        ]:
+            st.session_state.pop(key, None)
+
+        st.success(f"✓ Import completed successfully for {format_term_label(selected_term_code)}.")
+        st.info(f"New students: {imported_students} · Updated students: {updated_students} · Courses: {imported_courses} · Lifecycle records: {imported_lifecycle}")
+        st.rerun()
+
+    except Exception as e:
+        try:
+            s.rollback()
+        except Exception:
+            pass
+
+        st.error("The import could not be completed. No changes should be considered finalized.")
+        st.exception(e)
 # ------------------------------------------------------------------
 # DATA LOADERS (DYNAMICALLY MAPPED & FILTERED BY PROGRAM)
 # ------------------------------------------------------------------
@@ -306,7 +1150,10 @@ def load_students(
                 MAX(CASE WHEN stg.stage_name = 'coursework' THEN sls.last_updated_date END) AS updated_at,
                 MAX(CASE WHEN stg.stage_name = 'coursework' THEN sls.last_updated_date END) AS cw_updated_at,
                 MAX(CASE WHEN stg.stage_name = 'comprehensive_exam' THEN sls.last_updated_date END) AS ce_updated_at,
-                MAX(CASE WHEN stg.stage_name = 'capstone' THEN sls.last_updated_date END) AS cap_updated_at
+                MAX(CASE WHEN stg.stage_name = 'capstone' THEN sls.last_updated_date END) AS cap_updated_at,
+                MAX(CASE WHEN stg.stage_name = 'coursework' THEN sls.stage_started_date END) AS cw_started_at,
+                MAX(CASE WHEN stg.stage_name = 'comprehensive_exam' THEN sls.stage_started_date END) AS ce_started_at,
+                MAX(CASE WHEN stg.stage_name = 'capstone' THEN sls.stage_started_date END) AS cap_started_at
 
             FROM students_normalized s
 
@@ -374,23 +1221,37 @@ def load_students(
     df["comprehensive_exam_display"] = df["comprehensive_exam"].apply(lambda v: map_status(v, COMPREHENSIVE_EXAM_MAP))
     df["capstone_display"] = df["capstone"].apply(lambda v: map_status(v, CAPSTONE_MAP))
 
-    # 3. Calculate "At Risk" Flags
-    now_utc = pd.Timestamp.utcnow()
-    def calculate_risk(row):
-        reasons = []
-        if row.get('coursework_display') == 'Pending' and pd.notna(row.get('cw_updated_at')):
-            days = (now_utc - pd.to_datetime(row['cw_updated_at'], utc=True)).days
-            if days > cw_thresh: reasons.append(f"Coursework pending for {days} days (Limit: {cw_thresh})")
-            
-        if row.get('comprehensive_exam_display') == 'In-Progress' and pd.notna(row.get('ce_updated_at')):
-            days = (now_utc - pd.to_datetime(row['ce_updated_at'], utc=True)).days
-            if days > ce_thresh: reasons.append(f"Exam in-progress for {days} days (Limit: {ce_thresh})")
-            
-        if row.get('capstone_display') == 'In-Progress' and pd.notna(row.get('cap_updated_at')):
-            days = (now_utc - pd.to_datetime(row['cap_updated_at'], utc=True)).days
-            if days > cap_thresh: reasons.append(f"Capstone in-progress for {days} days (Limit: {cap_thresh})")
-            
-        return " | ".join(reasons) if reasons else ""
+# 3. Calculate "At Risk" Flags
+now_utc = pd.Timestamp.utcnow()
+
+def calculate_risk(row):
+    reasons = []
+
+    if row.get("coursework_display") == "Pending":
+        start_date = row.get("cw_started_at") if pd.notna(row.get("cw_started_at")) else row.get("cw_updated_at")
+
+        if pd.notna(start_date):
+            days = (now_utc - pd.to_datetime(start_date, utc=True)).days
+            if days > cw_thresh:
+                reasons.append(f"Coursework pending for {days} days (Limit: {cw_thresh})")
+
+    if row.get("comprehensive_exam_display") == "In-Progress":
+        start_date = row.get("ce_started_at") if pd.notna(row.get("ce_started_at")) else row.get("ce_updated_at")
+
+        if pd.notna(start_date):
+            days = (now_utc - pd.to_datetime(start_date, utc=True)).days
+            if days > ce_thresh:
+                reasons.append(f"Exam in-progress for {days} days (Limit: {ce_thresh})")
+
+    if row.get("capstone_display") == "In-Progress":
+        start_date = row.get("cap_started_at") if pd.notna(row.get("cap_started_at")) else row.get("cap_updated_at")
+
+        if pd.notna(start_date):
+            days = (now_utc - pd.to_datetime(start_date, utc=True)).days
+            if days > cap_thresh:
+                reasons.append(f"Capstone in-progress for {days} days (Limit: {cap_thresh})")
+
+    return " | ".join(reasons) if reasons else ""
 
     df['risk_details'] = df.apply(calculate_risk, axis=1)
     df['is_at_risk'] = df['risk_details'] != ""
@@ -438,6 +1299,7 @@ def fetch_student_lifecycle(student_number: int, selected_term_id: int | None = 
             stg.stage_name AS milestone_type,
             INITCAP(REPLACE(stg.stage_name, '_', ' ')) AS "Milestone",
             INITCAP(sts.status_name) AS "Recorded Status",
+            sls.stage_started_date AS "Stage Started",
             sls.last_updated_date AS "Last Updated"
         FROM student_lifecycle_status sls
         JOIN lifecycle_stage stg ON sls.stage_id = stg.stage_id
@@ -542,6 +1404,8 @@ if "admin_view" not in st.session_state:
 
 # 1. Define core app navigation options vs admin configuration options
 core_nav_options = ["Executive Dashboard", "Student Roster", "Student Profile Inspector"]
+if user.get("can_import", False):
+    core_nav_options.append("Add Data")
 admin_nav_options = ["Global Instance Settings", "Schema Mapping Config", "Permissions & Audit Logs", "Academic Terms"]
 
 # Ensure current view is valid
@@ -641,7 +1505,8 @@ section[data-testid="stSidebar"] .stButton button:hover {
 nav_config = {
     "Executive Dashboard": "EXECUTIVE DASHBOARD",
     "Student Roster": "STUDENT ROSTER",
-    "Student Profile Inspector": "STUDENT PROFILE"
+    "Student Profile Inspector": "STUDENT PROFILE",
+    "Add Data": "ADD DATA"
 }
 
 for opt in core_nav_options:
@@ -843,23 +1708,22 @@ def render_permissions_and_logs():
     t_perms, t_logs, t_syslogs = st.tabs(["User Permissions", "Live Audit Logs", "System Sync Failures"])
     
     with t_perms:
-        users_df = conn.query("SELECT user_id, username, full_name, role, can_edit FROM app_users ORDER BY user_id;", ttl=0)
+        users_df = conn.query("SELECT user_id, username, full_name, role, can_edit, can_import FROM app_users ORDER BY user_id;", ttl=0)
         st.dataframe(users_df, hide_index=True, use_container_width=True)
 
-        st.markdown("##### ✏️ Modify User Edit Permissions")
-        with st.form("admin_perm_form"):
-            target_username = st.selectbox("Select User Account", users_df["username"].tolist())
-            new_can_edit = st.checkbox("Grant Write / Edit Capability")
-            
-            if st.form_submit_button("Update Access Level"):
+st.markdown("##### ✏️ Modify User Permissions")
+with st.form("admin_perm_form"):
+    target_username = st.selectbox("Select User Account", users_df["username"].tolist())
+    target_user_row = users_df[users_df["username"] == target_username].iloc[0]
+    new_can_edit = st.checkbox("Grant Write / Edit Capability", value=bool(target_user_row["can_edit"]))
+    new_can_import = st.checkbox("Grant Add Data / Import Capability", value=bool(target_user_row["can_import"]))
+
+    if st.form_submit_button("Update Access Level"):
                 try:
                     with conn.session as s:
-                        s.execute(
-                            text("UPDATE app_users SET can_edit = :ce WHERE username = :u;"),
-                            {"ce": new_can_edit, "u": target_username}
-                        )
+                        s.execute(text("UPDATE app_users SET can_edit = :ce, can_import = :ci WHERE username = :u;"), {"ce": new_can_edit, "ci": new_can_import, "u": target_username})
                         s.commit()
-                    log_security_event(user["user_id"], "PERMISSIONS_UPDATED", f"Set can_edit={new_can_edit} for user '{target_username}'.")
+                    log_security_event(user["user_id"], "PERMISSIONS_UPDATED", f"Updated can_edit={new_can_edit}, can_import={new_can_import} for user '{target_username}'.")
                     st.success(f"Permissions successfully updated for {target_username}.")
                     st.rerun()
                 except Exception as ex:
@@ -2441,6 +3305,8 @@ elif st.session_state.admin_view == "Permissions & Audit Logs":
     render_permissions_and_logs()
 elif st.session_state.admin_view == "Academic Terms":
     render_academic_terms()
+elif st.session_state.admin_view == "Add Data":
+    render_add_data()
 else:
     try:
             df_all, last_sync = load_students(
