@@ -386,65 +386,63 @@ def clean_import_dataframe(df):
             lambda value: None if pd.isna(value) or str(value).strip().lower() in ("nan", "none") else value
         )
 
-    aliases = {
-        normalize_import_header(alias)
-        for values in IMPORT_FIELD_ALIASES.values()
-        for alias in values
-    }
-
-    header_scores = []
-
-    for index in range(min(5, len(df))):
-        matches = sum(
-            normalize_import_header(value) in aliases
-            for value in df.iloc[index]
-        )
-        header_scores.append((matches, index))
-
-    header_matches, header_row = max(header_scores, default=(0, 0))
-
-    if header_matches >= 2:
-        headers = []
-
-        for column_index in range(len(df.columns)):
-            values = [
-                df.iloc[row_index, column_index]
-                for row_index in range(header_row + 1)
-            ]
-
-            values = [
-                str(value).strip()
-                for value in values
-                if value is not None
-                and str(value).strip()
-                and str(value).strip().lower() not in ("nan", "none")
-            ]
-
-            header = values[-1] if values else f"Unnamed Column {column_index + 1}"
-
-            course_code = next(
-                (
-                    value
-                    for value in reversed(values)
-                    if re.fullmatch(r"[A-Z]{2,5}\d{3}", value.upper())
-                ),
-                None
-            )
-
-            if course_code:
-                headers.append(course_code)
-            else:
-                headers.append(header)
-
-        df = df.iloc[header_row + 1:].reset_index(drop=True)
-        df.columns = headers
-
-        return df
-
-    df.columns = [
-        str(column).strip() if str(column).strip() else f"Unnamed Column {index + 1}"
-        for index, column in enumerate(df.columns)
+    normalized_rows = [
+        [normalize_import_header(value) for value in df.iloc[index]]
+        for index in range(min(5, len(df)))
     ]
+
+    header_row = None
+
+    for index, row in enumerate(normalized_rows):
+        required_headers = {
+            "student number",
+            "student email",
+            "first",
+            "last",
+            "cohort"
+        }
+
+        if len(required_headers.intersection(row)) >= 3:
+            header_row = index
+            break
+
+    if header_row is None:
+        header_row = 0
+
+    headers = []
+
+    for column_index in range(len(df.columns)):
+        values = [
+            df.iloc[row_index, column_index]
+            for row_index in range(header_row + 1)
+        ]
+
+        values = [
+            str(value).strip()
+            for value in values
+            if value is not None
+            and str(value).strip()
+            and str(value).strip().lower() not in ("nan", "none")
+        ]
+
+        header = values[-1] if values else f"Unnamed Column {column_index + 1}"
+
+        course_code = next(
+            (
+                value
+                for value in reversed(values)
+                if re.fullmatch(r"[A-Z]{2,5}\d{3}", value.upper())
+            ),
+            None
+        )
+
+        if course_code:
+            headers.append(course_code)
+        else:
+            headers.append(header)
+
+    df = df.iloc[header_row + 1:].reset_index(drop=True)
+    df.columns = headers
 
     return df
 
