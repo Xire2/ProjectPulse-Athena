@@ -70,6 +70,8 @@ div[data-testid="stMetricValue"] div {
 div[data-testid="stPlotlyChart"] {
     width: 100% !important;
     max-width: 100% !important;
+    min-width: 0 !important;
+    overflow-x: hidden !important;
 }
 
 div[data-testid="stVerticalBlockBorderWrapper"] {
@@ -1232,7 +1234,7 @@ def render_student_list(df_all):
         <style>
         .roster-th { font-size: 0.85rem; font-weight: 700; color: #666; text-transform: uppercase; }
         .roster-th-divider { border-bottom: 2px solid #ddd; margin: 0.5rem 0 1rem 0; }
-        .roster-row-divider { border-bottom: 1px solid #eee; margin: 0.5rem 0; }
+        .roster-row-divider { border-bottom: 1px solid #eee; margin: 0.5rem 0; width: 100%; }
         .roster-cell-text, .roster-cell-id { font-size: 0.9rem; color: var(--text-color); overflow-wrap: anywhere; word-break: break-word; }
     
         .status-pill { background-color: #f0f2f6; padding: 4px 8px; border-radius: 12px; font-size: 0.8rem; color: #31333F !important; font-weight: 600; }
@@ -1256,6 +1258,7 @@ def render_student_list(df_all):
     
         div[data-testid="stVerticalBlock"]:has(.roster-scroll-marker) div[data-testid="stHorizontalBlock"] {
             min-width: 1050px !important;
+            width: 1050px !important;
         }
     }
     
