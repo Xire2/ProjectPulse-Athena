@@ -1005,7 +1005,7 @@ def finalize_import_to_database():
                         "student_number": student_number,
                         "course_code": course_code,
                         "term_id": term_id,
-                        "status": normalized_course_status
+                        "status": cleaned_course_status
                     }
 
                     existing_enrollment = s.execute(
@@ -1045,23 +1045,46 @@ def finalize_import_to_database():
                         )
                         imported_courses += 1
 
-                for stage_name, status_mapping in LIFECYCLE_STATUS_MAP.items():
-                    stage_source_column = {
-                        "coursework": detected_columns.get("coursework_status"),
-                        "comprehensive_exam": detected_columns.get("comprehensive_exam"),
-                        "capstone": detected_columns.get("capstone")
-                    }.get(stage_name)
+                lifecycle_columns = {
+                    "coursework": detected_columns.get("coursework_status"),
+                    "comprehensive_exam": detected_columns.get("comprehensive_exam"),
+                    "capstone": detected_columns.get("capstone")
+                }
 
+                lifecycle_values = {
+                    stage: clean_value(row.get(column))
+                    for stage, column in lifecycle_columns.items()
+                    if column
+                }
+
+                active_stage = next(
+                    (stage for stage in ["capstone", "comprehensive_exam", "coursework"]
+                     if lifecycle_values.get(stage, "").lower() in {"in progress", "pending"}),
+                    "capstone"
+                )
+
+                for stage_name, stage_source_column in lifecycle_columns.items():
                     if not stage_source_column:
                         continue
 
-                    cleaned_stage_status = clean_value(row.get(stage_source_column))
+                    cleaned_stage_status = lifecycle_values.get(stage_name)
+
                     if cleaned_stage_status is None:
                         continue
 
-                    mapped_status = status_mapping.get(cleaned_stage_status.lower())
-                    if mapped_status is None:
-                        continue
+                    status_lookup = {
+                        "done": "completed",
+                        "completed": "completed",
+                        "in progress": "in-progress",
+                        "incomplete": "incomplete",
+                        "pending": "pending",
+                        "cancelled": "cancelled"
+                    }
+
+                    status_name = status_lookup.get(
+                        cleaned_stage_status.lower(),
+                        cleaned_stage_status
+                    )
 
                     stage_result = s.execute(
                         text("""
@@ -1082,10 +1105,11 @@ def finalize_import_to_database():
                         text("""
                             SELECT status_id
                             FROM lifecycle_status
-                            WHERE LOWER(status_name) = LOWER(:status_name)
+                            WHERE LOWER(REPLACE(status_name, ' ', '-')) =
+                                  LOWER(REPLACE(:status_name, ' ', '-'))
                             LIMIT 1;
                         """),
-                        {"status_name": mapped_status}
+                        {"status_name": status_name}
                     ).fetchone()
 
                     if not status_result:
@@ -1123,6 +1147,9 @@ def finalize_import_to_database():
                             }
                         )
                     else:
+                        stage_started_date = import_date if stage_name == active_stage else None
+                        stage_started_date_source = "System Assigned" if stage_name == active_stage else None
+
                         s.execute(
                             text("""
                                 INSERT INTO student_lifecycle_status (
@@ -1141,8 +1168,8 @@ def finalize_import_to_database():
                                 "stage_id": stage_id,
                                 "status_id": status_id,
                                 "term_id": term_id,
-                                "stage_started_date": import_date,
-                                "stage_started_date_source": "System Assigned"
+                                "stage_started_date": stage_started_date,
+                                "stage_started_date_source": stage_started_date_source
                             }
                         )
                         imported_lifecycle += 1
