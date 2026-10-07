@@ -2272,28 +2272,29 @@ def render_completion_trend_chart(df_all, active_program):
             WHERE term_id = :term_id;
         """, params={"term_id": term_id}, ttl=0)
 
-        if lifecycle_count.empty or int(lifecycle_count.iloc[0]["record_count"]) == 0:
-            continue
-
-        term_df, _ = load_students(active_program, term_id)
-
-        if term_df.empty:
-            continue
-
-        total_students = len(term_df)
-
-        fully_completed = len(
-            term_df[
-                (term_df["coursework_display"] == "Completed") &
-                (term_df["comprehensive_exam_display"] == "Passed") &
-                (term_df["capstone_display"] == "Defended")
-            ]
+        has_data = (
+            not lifecycle_count.empty and
+            int(lifecycle_count.iloc[0]["record_count"]) > 0
         )
 
-        if total_students == 0:
-            continue
+        completion_rate = None
 
-        completion_rate = fully_completed / total_students * 100
+        if has_data:
+            term_df, _ = load_students(active_program, term_id)
+
+            if not term_df.empty:
+                total_students = len(term_df)
+
+                fully_completed = len(
+                    term_df[
+                        (term_df["coursework_display"] == "Completed") &
+                        (term_df["comprehensive_exam_display"] == "Passed") &
+                        (term_df["capstone_display"] == "Defended")
+                    ]
+                )
+
+                if total_students > 0:
+                    completion_rate = fully_completed / total_students * 100
 
         trend_rows.append({
             "term_code": term_code,
@@ -2301,13 +2302,7 @@ def render_completion_trend_chart(df_all, active_program):
             "sort_date": term["start_date"]
         })
 
-    trend_df = pd.DataFrame(trend_rows)
-
-    if trend_df.empty:
-        st.info("No completion data is available for the last 4 terms.")
-        return
-
-    trend_df = trend_df.sort_values("sort_date")
+    trend_df = pd.DataFrame(trend_rows).sort_values("sort_date")
 
     fig = px.line(
         trend_df,
@@ -2334,7 +2329,8 @@ def render_completion_trend_chart(df_all, active_program):
         line_width=3,
         texttemplate="%{text:.2f}%",
         textposition="top center",
-        textfont=dict(size=12, color="var(--text-color)")
+        textfont=dict(size=12, color="var(--text-color)"),
+        connectgaps=False
     )
 
     st.subheader(
