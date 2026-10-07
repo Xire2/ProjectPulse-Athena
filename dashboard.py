@@ -821,7 +821,7 @@ def finalize_import_to_database():
                         adviser_id = adviser_result[0]
 
                 existing_student = s.execute(
-                    text("SELECT student_number FROM students WHERE student_number = :student_number LIMIT 1;"),
+                    text("SELECT student_number FROM students_normalized WHERE student_number = :student_number LIMIT 1;"),
                     {"student_number": student_number}
                 ).fetchone()
 
@@ -841,7 +841,7 @@ def finalize_import_to_database():
                 if existing_student:
                     s.execute(
                         text("""
-                            UPDATE students
+                            UPDATE students_normalized
                             SET student_email = :student_email,
                                 first_name = :first_name,
                                 last_name = :last_name,
@@ -859,7 +859,7 @@ def finalize_import_to_database():
                 else:
                     s.execute(
                         text("""
-                            INSERT INTO students (
+                            INSERT INTO students_normalized (
                                 student_number, student_email, first_name, last_name,
                                 cohort_id, adviser_id, program_id, graduate_on_time,
                                 graduate_date_term_sy, remarks
@@ -1641,15 +1641,12 @@ def render_instance_settings():
                 load_students.clear()
             except Exception as e:
                 st.error(f"Error saving thresholds: {e}")
-
-
 # ------------------------------------------------------------------
 # VIEW: IT/ADMIN SCHEMA CONFIGURATION
 # ------------------------------------------------------------------
 def render_schema_mapping():
     st.subheader("⚙️ Dynamic Schema Field Mapping")
     st.caption("Map dashboard UI elements directly to the underlying SQL database columns. No code deployment required.")
-
     try:
         actual_cols_df = conn.query("""
             SELECT column_name FROM information_schema.columns WHERE table_name = 'students_normalized'
