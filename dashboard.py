@@ -10,11 +10,6 @@ import plotly.express as px
 from sqlalchemy import text
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from io import BytesIO
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import landscape, A4
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
 import re
 import os
 
@@ -32,12 +27,11 @@ st.markdown("""
 }
 
 div[data-testid="stHorizontalBlock"] {
-    min-width: 0 !important;
-    max-width: 100% !important;
+    min-width: 0;
 }
+
 div[data-testid="stHorizontalBlock"] > div {
-    min-width: 0 !important;
-    max-width: 100% !important;
+    min-width: 0;
 }
 
 div[data-testid="stMetric"] {
@@ -67,49 +61,16 @@ div[data-testid="stMetricValue"] div {
 [data-testid="stTable"] {
     width: 100%;
 }
-
-div[data-testid="stPlotlyChart"],
-div[data-testid="stPlotlyChart"] > div,
-div[data-testid="stPlotlyChart"] .js-plotly-plot,
-div[data-testid="stPlotlyChart"] .plot-container,
-div[data-testid="stPlotlyChart"] .svg-container {
-   width: 100% !important;
-   max-width: 100% !important;
-   min-width: 0 !important;
-   overflow: hidden !important;
+div[data-testid="stPlotlyChart"] {
+    width: 100% !important;
+    max-width: 100% !important;
 }
-@media (min-width: 769px) and (max-width: 1100px) {
-   div[data-testid="stPlotlyChart"] {
-      min-width: 0 !important;
-      width: 100% !important;
-      max-width: 100% !important;
-   }
 
-   div[data-testid="stPlotlyChart"] .js-plotly-plot,
-   div[data-testid="stPlotlyChart"] .plot-container,
-   div[data-testid="stPlotlyChart"] .svg-container {
-      min-width: 0 !important;
-      width: 100% !important;
-      max-width: 100% !important;
-   }
-}
 div[data-testid="stVerticalBlockBorderWrapper"] {
     min-width: 0 !important;
     max-width: 100% !important;
 }
-@media (min-width: 769px) and (max-width: 1100px) {
-    div[data-testid="stHorizontalBlock"]:not(:has(.roster-row-marker)):not(:has(.roster-header-marker)):not(:has(.roster-scroll-marker)) {
-        width: 100% !important;
-        max-width: 100% !important;
-        min-width: 0 !important;
-    }
 
-    div[data-testid="stHorizontalBlock"]:not(:has(.roster-row-marker)):not(:has(.roster-header-marker)):not(:has(.roster-scroll-marker)) > div {
-        min-width: 0 !important;
-        max-width: 100% !important;
-        flex: 1 1 0% !important;
-    }
-}
 @media (max-width: 1100px) {
     div[data-testid="stMetricValue"] div {
         font-size: 1.7rem !important;
@@ -763,7 +724,7 @@ def render_instance_settings():
     with st.form("thresholds_form"):
         c1, c2, c3 = st.columns(3)
         new_cw = c1.number_input("Coursework Limit (Days)", value=cur_cw, min_value=1, help="Expected duration to clear core classes.")
-        new_ce = c2.number_input("Comprehensive Exam Limit (Days)", value=cur_ce, min_value=1, help="Expected duration to pass the exam once initiated.")
+        new_ce = c2.number_input("Comp Exam Limit (Days)", value=cur_ce, min_value=1, help="Expected duration to pass the exam once initiated.")
         new_cap = c3.number_input("Capstone Limit (Days)", value=cur_cap, min_value=1, help="Expected duration to defend capstone once started.")
         
         if st.form_submit_button("Save Program Thresholds"):
@@ -970,291 +931,8 @@ def render_completion_trend_chart(df_all, active_program):
     )
     
     st.subheader(f"Completion Trend — Last 4 Terms", help="Shows the percentage of students in each cohort who have successfully completed all core coursework.")
-    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False, "responsive": True})
-def create_executive_dashboard_pdf(df_summary, summary_label, last_sync):
-    from io import BytesIO
-    from reportlab.lib import colors
-    from reportlab.lib.pagesizes import landscape, A4
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-    from reportlab.lib.styles import getSampleStyleSheet
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
-    total_students = len(df_summary)
-    cw_completed = len(df_summary[df_summary["coursework_display"] == "Completed"])
-    exam_passed = len(df_summary[df_summary["comprehensive_exam_display"] == "Passed"])
-    capstone_defended = len(df_summary[df_summary["capstone_display"] == "Defended"])
-
-    evaluated_df = df_summary[
-        df_summary["graduate_on_time"].notna() &
-        (df_summary["graduate_on_time"].astype(str).str.strip() != "") &
-        (~df_summary["graduate_on_time"].astype(str).str.lower().isin(["n/a", "none"]))
-    ]
-
-    grad_numerator = len(
-        evaluated_df[
-            evaluated_df["graduate_on_time"].astype(str).str.lower().isin(
-                ["yes", "y", "true", "1"]
-            )
-        ]
-    )
-
-    on_time_rate = (grad_numerator / total_students * 100) if total_students > 0 else 0.0
-
-    fully_completed = len(
-        df_summary[
-            (df_summary["coursework_display"] == "Completed") &
-            (df_summary["comprehensive_exam_display"] == "Passed") &
-            (df_summary["capstone_display"] == "Defended")
-        ]
-    )
-
-    completion_rate = int((fully_completed / total_students * 100)) if total_students > 0 else 0
-    remaining_students = total_students - fully_completed
-    at_risk_count = int(df_summary["is_at_risk"].sum())
-
-    current_cw = len(df_summary[df_summary["coursework_display"] != "Completed"])
-
-    current_ce = len(
-        df_summary[
-            (df_summary["coursework_display"] == "Completed") &
-            (df_summary["comprehensive_exam_display"] != "Passed")
-        ]
-    )
-
-    current_cap = len(
-        df_summary[
-            (df_summary["coursework_display"] == "Completed") &
-            (df_summary["comprehensive_exam_display"] == "Passed") &
-            (df_summary["capstone_display"] != "Defended")
-        ]
-    )
-
-    pdf_buffer = BytesIO()
-
-    doc = SimpleDocTemplate(
-        pdf_buffer,
-        pagesize=landscape(A4),
-        rightMargin=24,
-        leftMargin=24,
-        topMargin=20,
-        bottomMargin=20
-    )
-
-    styles = getSampleStyleSheet()
-    story = []
-
-    story.append(
-        Paragraph(
-            "<b>Project Pulse — Executive Dashboard</b>",
-            styles["Title"]
-        )
-    )
-
-    story.append(
-        Paragraph(
-            f"{ACTIVE_PROGRAM} Program · {summary_label}",
-            styles["Normal"]
-        )
-    )
-
-    story.append(
-        Paragraph(
-            f"<b>Data Last Synchronized:</b> {last_sync}",
-            styles["Normal"]
-        )
-    )
-
-    story.append(Spacer(1, 10))
-
-    kpi_data = [
-        [
-            "TOTAL STUDENTS",
-            "COURSEWORK",
-            "COMPREHENSIVE EXAM",
-            "CAPSTONES",
-            "ON-TIME GRAD",
-            "COMPLETION",
-            "REMAINING",
-            "AT RISK"
-        ],
-        [
-            str(total_students),
-            str(cw_completed),
-            str(exam_passed),
-            str(capstone_defended),
-            f"{on_time_rate:.1f}%",
-            f"{completion_rate}%",
-            str(remaining_students),
-            str(at_risk_count)
-        ]
-    ]
-
-    kpi_table = Table(kpi_data, colWidths=[85] * 8)
-
-    kpi_table.setStyle(
-        TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F2F2F2")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#666666")),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTNAME", (0, 1), (-1, 1), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, 0), 7),
-            ("FONTSIZE", (0, 1), (-1, 1), 15),
-            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#DDDDDD")),
-            ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#DDDDDD")),
-            ("TOPPADDING", (0, 0), (-1, -1), 8),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-        ])
-    )
-
-    story.append(kpi_table)
-    story.append(Spacer(1, 12))
-
-    # ---------- LIFECYCLE BREAKDOWN ----------
-    lifecycle_data = [
-        ["Lifecycle Stage", "Students", "Percentage"],
-        [
-            "Overall Completion",
-            str(fully_completed),
-            f"{(fully_completed / total_students * 100) if total_students else 0:.1f}%"
-        ],
-        [
-            "Capstone",
-            str(current_cap),
-            f"{(current_cap / total_students * 100) if total_students else 0:.1f}%"
-        ],
-        [
-            "Comprehensive Exam",
-            str(current_ce),
-            f"{(current_ce / total_students * 100) if total_students else 0:.1f}%"
-        ],
-        [
-            "Coursework",
-            str(current_cw),
-            f"{(current_cw / total_students * 100) if total_students else 0:.1f}%"
-        ]
-    ]
-
-    lifecycle_table = Table(
-        lifecycle_data,
-        colWidths=[150, 80, 90]
-    )
-
-    lifecycle_table.setStyle(
-        TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F2F2F2")),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
-            ("FONTSIZE", (0, 0), (-1, -1), 9),
-            ("ALIGN", (1, 0), (-1, -1), "CENTER"),
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#DDDDDD")),
-            ("TOPPADDING", (0, 0), (-1, -1), 7),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
-        ])
-    )
-
-    # ---------- COMPLETION TREND ----------
-    trend_source = df_summary.copy()
-    trend_source["is_completed"] = (
-        trend_source["coursework_display"] == "Completed"
-    )
-
-    trend_df = trend_source.groupby("cohort").agg(
-        total_students=("coursework_display", "count"),
-        completed_students=("is_completed", "sum")
-    ).reset_index()
-
-    if not trend_df.empty:
-        trend_df["completion_rate"] = (
-            trend_df["completed_students"] /
-            trend_df["total_students"] * 100
-        )
-
-        trend_df["sort_year"] = (
-            trend_df["cohort"]
-            .astype(str)
-            .str.extract(r"[TQ](\d{2})")
-            .astype(float)
-        )
-
-        trend_df["sort_term"] = (
-            trend_df["cohort"]
-            .astype(str)
-            .str.extract(r"^(\d)[TQ]")
-            .astype(float)
-        )
-
-        trend_df = (
-            trend_df
-            .dropna(subset=["sort_year", "sort_term"])
-            .sort_values(["sort_year", "sort_term"])
-            .tail(4)
-        )
-
-    trend_data = [["Academic Term", "Completion Rate"]]
-
-    if not trend_df.empty:
-        for _, row in trend_df.iterrows():
-            trend_data.append([
-                str(row["cohort"]),
-                f"{row['completion_rate']:.1f}%"
-            ])
-    else:
-        trend_data.append(["No trend data", "N/A"])
-
-    trend_table = Table(
-        trend_data,
-        colWidths=[150, 120]
-    )
-
-    trend_table.setStyle(
-        TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F2F2F2")),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, -1), 9),
-            ("ALIGN", (1, 0), (-1, -1), "CENTER"),
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#DDDDDD")),
-            ("TOPPADDING", (0, 0), (-1, -1), 7),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
-        ])
-    )
-
-    chart_tables = Table(
-        [[lifecycle_table, trend_table]],
-        colWidths=[400, 400]
-    )
-
-    chart_tables.setStyle(
-        TableStyle([
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ])
-    )
-
-    story.append(chart_tables)
-    story.append(Spacer(1, 12))
-
-    story.append(
-        Paragraph(
-            f"<b>At-Risk Students:</b> {at_risk_count} student(s) currently "
-            "exceed the expected duration threshold for their current lifecycle stage.",
-            styles["Normal"]
-        )
-    )
-
-    story.append(Spacer(1, 6))
-
-    story.append(
-        Paragraph(
-            "Mapúa University · ETYSB Success Advisor Dashboard · Leadership Meeting View",
-            styles["Normal"]
-        )
-    )
-
-    doc.build(story)
-
-    pdf_buffer.seek(0)
-    return pdf_buffer.getvalue()
 # ------------------------------------------------------------------
 # VIEW 1: STUDENT ROSTER (Dashboard)
 # ------------------------------------------------------------------
@@ -1265,7 +943,7 @@ def render_student_list(df_all):
         <style>
         .roster-th { font-size: 0.85rem; font-weight: 700; color: #666; text-transform: uppercase; }
         .roster-th-divider { border-bottom: 2px solid #ddd; margin: 0.5rem 0 1rem 0; }
-        .roster-row-divider { border-bottom: 1px solid #eee; margin: 0.5rem 0; width: 1050px; }
+        .roster-row-divider { border-bottom: 1px solid #eee; margin: 0.5rem 0; }
         .roster-cell-text, .roster-cell-id { font-size: 0.9rem; color: var(--text-color); overflow-wrap: anywhere; word-break: break-word; }
     
         .status-pill { background-color: #f0f2f6; padding: 4px 8px; border-radius: 12px; font-size: 0.8rem; color: #31333F !important; font-weight: 600; }
@@ -1275,32 +953,11 @@ def render_student_list(df_all):
         .roster-row-marker, .roster-header-marker {
             display: none !important;
         }
-        .roster-scroll-marker {
-        display: none !important;
-    }
     
-    @media (min-width: 769px) and (max-width: 1100px) {
-        div[data-testid="stVerticalBlock"]:has(.roster-scroll-marker) {
-            width: 100% !important;
-            max-width: 100% !important;
-            overflow-x: auto !important;
-            overflow-y: visible !important;
+        div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) {
+            border-radius: 6px !important;
+            padding: 6px 4px !important;
         }
-    
-        div[data-testid="stVerticalBlock"]:has(.roster-scroll-marker) div[data-testid="stHorizontalBlock"] {
-            min-width: 1050px !important;
-            width: 1050px !important;
-        }
-        .roster-th-divider {
-            width: 1050px !important;
-            min-width: 1050px !important;
-        }
-    }
-    
-    div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) {
-        border-radius: 6px !important;
-        padding: 6px 4px !important;
-    }
     
         div[data-testid="stHorizontalBlock"]:has(.roster-row-marker):has(.sr-risk-pill) {
             background-color: #D500001A !important;
@@ -1350,7 +1007,7 @@ def render_student_list(df_all):
             div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(3)::before { content: "COHORT"; }
             div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(4)::before { content: "ADVISER"; }
             div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(5)::before { content: "COURSEWORK"; }
-            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(6)::before { content: "COMPREHENSIVE EXAM"; }
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(6)::before { content: "COMP EXAM"; }
             div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(7)::before { content: "CAPSTONE"; }
             div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(8)::before { content: "LAST UPDATE"; }
             div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(9)::before { content: "RISK"; }
@@ -1398,89 +1055,89 @@ def render_student_list(df_all):
     # Helper function to reuse the exact same grid layout across multiple pages
     def render_roster_grid(display_df, key_prefix):
         col_widths = [0.9, 1.5, 0.8, 1.5, 1.2, 1.2, 1.4, 0.9, 0.9, 0.8]
-        header_labels = ["STUDENT ID", "NAME", "COHORT", "ADVISER", "COURSEWORK", "COMPREHENSIVE EXAM", "CAPSTONE", "LAST UPDATE", "RISK", "ACTION"]
+        header_labels = ["STUDENT ID", "NAME", "COHORT", "ADVISER", "COURSEWORK", "COMP EXAM", "CAPSTONE", "LAST UPDATE", "RISK", "ACTION"]
     
-        with st.container():
-            st.markdown('<span class="roster-scroll-marker"></span>', unsafe_allow_html=True)
+        header_cols = st.columns(col_widths, vertical_alignment="center")
+        header_cols[0].markdown('<span class="roster-header-marker"></span>', unsafe_allow_html=True)
     
-            header_cols = st.columns(col_widths, vertical_alignment="center")
-            header_cols[0].markdown('<span class="roster-header-marker"></span>', unsafe_allow_html=True)
+        for col, label in zip(header_cols, header_labels):
+            col.markdown(f'<div class="roster-th">{label}</div>', unsafe_allow_html=True)
     
-            for col, label in zip(header_cols, header_labels):
-                col.markdown(f'<div class="roster-th">{label}</div>', unsafe_allow_html=True)
+        st.markdown('<div class="roster-th-divider"></div>', unsafe_allow_html=True)
     
-            st.markdown('<div class="roster-th-divider"></div>', unsafe_allow_html=True)
+        for _, row in display_df.iterrows():
+            is_at_risk = str(row.get("Risk Status", "")).strip() == "Flagged"
     
-            for _, row in display_df.iterrows():
-                r_cols = st.columns(col_widths, vertical_alignment="center")
-                r_cols[0].markdown('<span class="roster-row-marker"></span>', unsafe_allow_html=True)
+            r_cols = st.columns(col_widths, vertical_alignment="center")
     
-                r_cols[0].markdown(
-                    f'<span class="roster-cell-id">{row.get("Student ID", "")}</span>',
+            r_cols[0].markdown('<span class="roster-row-marker"></span>', unsafe_allow_html=True)
+    
+            r_cols[0].markdown(
+                f'<span class="roster-cell-id">{row.get("Student ID", "")}</span>',
+                unsafe_allow_html=True
+            )
+    
+            r_cols[1].markdown(
+                f'<span class="roster-cell-text">{row.get("Name", "")}</span>',
+                unsafe_allow_html=True
+            )
+    
+            r_cols[2].markdown(
+                f'<span class="roster-cell-text">{row.get("Cohort", "")}</span>',
+                unsafe_allow_html=True
+            )
+    
+            r_cols[3].markdown(
+                f'<span class="roster-cell-text">{row.get("Adviser", "")}</span>',
+                unsafe_allow_html=True
+            )
+    
+            r_cols[4].markdown(
+                get_stage_badge("coursework", row.get("Coursework", "")),
+                unsafe_allow_html=True
+            )
+    
+            r_cols[5].markdown(
+                get_stage_badge("comprehensive_exam", row.get("Comprehensive Exam", "")),
+                unsafe_allow_html=True
+            )
+    
+            r_cols[6].markdown(
+                get_stage_badge("capstone", row.get("Capstone", "")),
+                unsafe_allow_html=True
+            )
+    
+            last_upd = row.get("Last Update", "")
+            display_date = last_upd if str(last_upd).strip() != "N/A" else "—"
+    
+            r_cols[7].markdown(
+                f'<span class="roster-cell-text">{display_date}</span>',
+                unsafe_allow_html=True
+            )
+    
+            risk_status = str(row.get("Risk Status", "")).strip()
+    
+            if risk_status == "Flagged":
+                r_cols[8].markdown(
+                    '<span class="sr-risk-pill">AT RISK</span>',
+                    unsafe_allow_html=True
+                )
+            else:
+                r_cols[8].markdown(
+                    '<span class="sr-risk-none">ON TRACK</span>',
                     unsafe_allow_html=True
                 )
     
-                r_cols[1].markdown(
-                    f'<span class="roster-cell-text">{row.get("Name", "")}</span>',
-                    unsafe_allow_html=True
+            with r_cols[9]:
+                st.button(
+                    "**View\nProfile**",
+                    key=f"view_{key_prefix}_{row.get('Student ID', '')}",
+                    use_container_width=True,
+                    on_click=go_to_profile,
+                    args=(row.get("Email", ""),)
                 )
     
-                r_cols[2].markdown(
-                    f'<span class="roster-cell-text">{row.get("Cohort", "")}</span>',
-                    unsafe_allow_html=True
-                )
-    
-                r_cols[3].markdown(
-                    f'<span class="roster-cell-text">{row.get("Adviser", "")}</span>',
-                    unsafe_allow_html=True
-                )
-    
-                r_cols[4].markdown(
-                    get_stage_badge("coursework", row.get("Coursework", "")),
-                    unsafe_allow_html=True
-                )
-    
-                r_cols[5].markdown(
-                    get_stage_badge("comprehensive_exam", row.get("Comprehensive Exam", "")),
-                    unsafe_allow_html=True
-                )
-    
-                r_cols[6].markdown(
-                    get_stage_badge("capstone", row.get("Capstone", "")),
-                    unsafe_allow_html=True
-                )
-    
-                last_upd = row.get("Last Update", "")
-                display_date = last_upd if str(last_upd).strip() != "N/A" else "—"
-    
-                r_cols[7].markdown(
-                    f'<span class="roster-cell-text">{display_date}</span>',
-                    unsafe_allow_html=True
-                )
-    
-                risk_status = str(row.get("Risk Status", "")).strip()
-    
-                if risk_status == "Flagged":
-                    r_cols[8].markdown(
-                        '<span class="sr-risk-pill">AT RISK</span>',
-                        unsafe_allow_html=True
-                    )
-                else:
-                    r_cols[8].markdown(
-                        '<span class="sr-risk-none">ON TRACK</span>',
-                        unsafe_allow_html=True
-                    )
-    
-                with r_cols[9]:
-                    st.button(
-                        "**View\nProfile**",
-                        key=f"view_{key_prefix}_{row.get('Student ID', '')}",
-                        use_container_width=True,
-                        on_click=go_to_profile,
-                        args=(row.get("Email", ""),)
-                    )
-    
-                st.markdown('<div class="roster-row-divider"></div>', unsafe_allow_html=True)
+            st.markdown('<div class="roster-row-divider"></div>', unsafe_allow_html=True)
     
         st.caption(f"Showing {len(display_df)} students.")
 
@@ -1514,14 +1171,8 @@ def render_student_list(df_all):
 
     # --- RENDER EXECUTIVE DASHBOARD ---
     if st.session_state.admin_view == "Executive Dashboard":
-        title_col, export_col = st.columns([5, 1], vertical_alignment="bottom")
-
-        with title_col:
-            st.markdown(f"#### Executive Summary — {summary_label}")
-
-        with export_col:
-            pdf_button_placeholder = st.empty()
-
+        st.markdown(f"#### Executive Summary — {summary_label}")
+        
         # --- Dashboard Filters (No Search or Sort) ---
         cohort_col, adv_col = st.columns(2)
         with cohort_col:
@@ -1542,21 +1193,6 @@ def render_student_list(df_all):
         # Apply Adviser Filter to the dashboard metrics!
         if selected_adviser != "All":
             df_summary = df_summary[df_summary["adviser"].astype(str) == selected_adviser]
-
-        pdf_data = create_executive_dashboard_pdf(
-            df_summary,
-            summary_label,
-            st.session_state.get("last_sync", "Unknown")
-        )
-
-        with pdf_button_placeholder:
-            st.download_button(
-                label="📄 Export PDF",
-                data=pdf_data,
-                file_name=f"{ACTIVE_PROGRAM}_Executive_Dashboard.pdf",
-                mime="application/pdf",
-                use_container_width=True
-            )
             
         total_students = len(df_summary)
         cw_completed = len(df_summary[df_summary["coursework_display"] == "Completed"])
@@ -1582,9 +1218,7 @@ def render_student_list(df_all):
         completion_rate = int((fully_completed / total_students * 100)) if total_students > 0 else 0
 
         remaining_students = int(total_students - fully_completed)
-        missing_coursework = len(df_summary[df_summary["coursework_display"] != "Completed"])
-        missing_exam = len(df_summary[df_summary["comprehensive_exam_display"] != "Passed"])
-        missing_capstone = len(df_summary[df_summary["capstone_display"] != "Defended"])
+        at_risk_count = int(df_summary["is_at_risk"].sum()) # Calculated here first
 
         # --- TERM-OVER-TERM COMPARISON LOGIC ---
         all_cohorts_sorted = sorted([str(c) for c in df_all["cohort"].dropna().unique() if str(c).strip()], key=get_cohort_val)
@@ -1615,31 +1249,29 @@ def render_student_list(df_all):
             p_comp_rate = int((p_comp / p_total * 100)) if p_total > 0 else 0.0
             
             p_rem = p_total - p_comp
+            p_at_risk = int(df_prior["is_at_risk"].sum())
             
             grad_delta_str = f"{on_time_rate - p_on_time_rate:+.1f}% vs {prior_cohort}"
             comp_delta_str = f"{completion_rate - p_comp_rate:+.0f}% vs {prior_cohort}"
             rem_delta_str = f"{remaining_students - p_rem:+} vs {prior_cohort}"
+            risk_delta_str = f"{at_risk_count - p_at_risk:+} vs {prior_cohort}"
             
             grad_color_mode = "normal"
             comp_color_mode = "normal"
             rem_color_mode = "inverse"
+            risk_color_mode = "inverse"
         else:
             grad_delta_str = f"{grad_numerator} out of {total_students} students"
             comp_delta_str = f"{fully_completed} out of {total_students} students"
             rem_delta_str = f"{remaining_students} out of {total_students} students"
+            risk_delta_str = f"{at_risk_count} out of {total_students} students"
             
             grad_color_mode = "normal" if on_time_rate >= 50 else "inverse"
             comp_color_mode = "normal" if completion_rate >= 50 else "inverse"
             
             rem_percentage = (remaining_students / total_students * 100) if total_students > 0 else 0
             rem_color_mode = "inverse" if rem_percentage > 50 else "normal"
-
-        top_c1, top_c2, top_c3, top_c4 = st.columns(4)
-        top_c1.metric(label="Total Students", value=total_students, help="Total students matching filters.")
-        top_c2.metric(label="Coursework", value=cw_completed, help="Completed required core coursework.")
-        top_c3.metric(label="Comprehensive Exam", value=exam_passed, help="Passed Comprehensive Examination.")
-        top_c4.metric(label="Capstones", value=capstone_defended, help="Defended and finalized Capstone project.")
-        st.write("")
+            risk_color_mode = "inverse" if at_risk_count > 0 else "normal"
 
         st.markdown(
             """
@@ -1672,15 +1304,29 @@ def render_student_list(df_all):
                 border-top: 4px solid #c8102e !important;
                 background-color: var(--background-color);
             }
+
+            /* Hide the delta arrow/dash specifically for the Total Students metric */
+            div[data-testid="stHorizontalBlock"] > div:nth-child(1) div[data-testid="stMetricDelta"] svg {
+                display: none;
+            }
             </style>
             """,
             unsafe_allow_html=True
         )
 
-        bot_c1, bot_c2, bot_c3 = st.columns(3)
-        bot_c1.metric(label="On-Time Grad Rate", value=f"{on_time_rate:.1f}%", delta=grad_delta_str, delta_color=grad_color_mode)
-        bot_c2.metric(label="Overall Completion", value=f"{completion_rate}%", delta=comp_delta_str, delta_color=comp_color_mode)
-        bot_c3.metric(label="Remaining Students", value=remaining_students, delta=rem_delta_str, delta_color=rem_color_mode)
+        # Consolidated single row of 5 core metrics
+        m1, m2, m3, m4, m5 = st.columns(5)
+        
+        # Format the delta text for the first tile
+        display_cohort_delta = "All Cohorts" if active_cohort == "All" else f"Cohort: {active_cohort}"
+        
+        m1.metric(label="Total Students", value=total_students, delta=display_cohort_delta, delta_color="off", help="Total students matching filters.")
+        m2.metric(label="On-Time Grad Rate", value=f"{on_time_rate:.1f}%", delta=grad_delta_str, delta_color=grad_color_mode)
+        m3.metric(label="Overall Completion", value=f"{completion_rate}%", delta=comp_delta_str, delta_color=comp_color_mode)
+        m4.metric(label="Remaining Students", value=remaining_students, delta=rem_delta_str, delta_color=rem_color_mode)
+        m5.metric(label="Students At Risk", value=at_risk_count, delta=risk_delta_str, delta_color=risk_color_mode, help="Students who have exceeded expected duration thresholds.")
+        
+        st.write("")
         
         col1, col2 = st.columns(2)
 
@@ -1740,7 +1386,7 @@ def render_student_list(df_all):
 
                 # 1. Render Chart and Capture Click
                 chart_event = st.plotly_chart(
-                    fig, width="stretch", config={"displayModeBar": False, "responsive": True},
+                    fig, width="stretch", config={"displayModeBar": False},
                     on_select="rerun", selection_mode="points", key=f"lifecycle_chart_{st.session_state.chart_key_counter}"
                 )
 
@@ -2159,7 +1805,6 @@ elif st.session_state.admin_view == "Permissions & Audit Logs":
 else:
     try:
             df_all, last_sync = load_students(ACTIVE_PROGRAM)
-            st.session_state.last_sync = last_sync
             st.session_state.consecutive_sync_failures = 0
             st.caption(f"🕒 **Data Last Synchronized:** `{last_sync}`")
             
