@@ -1219,46 +1219,47 @@ def load_students(
     df["comprehensive_exam_display"] = df["comprehensive_exam"].apply(lambda v: map_status(v, COMPREHENSIVE_EXAM_MAP))
     df["capstone_display"] = df["capstone"].apply(lambda v: map_status(v, CAPSTONE_MAP))
 
-# 3. Calculate "At Risk" Flags
-now_utc = pd.Timestamp.utcnow()
+    # 3. Calculate "At Risk" Flags
+    now_utc = pd.Timestamp.utcnow()
 
-def calculate_risk(row):
-    reasons = []
+    def calculate_risk(row):
+        reasons = []
 
-    if row.get("coursework_display") == "Pending":
-        start_date = row.get("cw_started_at") if pd.notna(row.get("cw_started_at")) else row.get("cw_updated_at")
+        if row.get("coursework_display") == "Pending":
+            start_date = row.get("cw_started_at") if pd.notna(row.get("cw_started_at")) else row.get("cw_updated_at")
 
-        if pd.notna(start_date):
-            days = (now_utc - pd.to_datetime(start_date, utc=True)).days
-            if days > cw_thresh:
-                reasons.append(f"Coursework pending for {days} days (Limit: {cw_thresh})")
+            if pd.notna(start_date):
+                days = (now_utc - pd.to_datetime(start_date, utc=True)).days
+                if days > cw_thresh:
+                    reasons.append(f"Coursework pending for {days} days (Limit: {cw_thresh})")
 
-    if row.get("comprehensive_exam_display") == "In-Progress":
-        start_date = row.get("ce_started_at") if pd.notna(row.get("ce_started_at")) else row.get("ce_updated_at")
+        if row.get("comprehensive_exam_display") == "In-Progress":
+            start_date = row.get("ce_started_at") if pd.notna(row.get("ce_started_at")) else row.get("ce_updated_at")
 
-        if pd.notna(start_date):
-            days = (now_utc - pd.to_datetime(start_date, utc=True)).days
-            if days > ce_thresh:
-                reasons.append(f"Exam in-progress for {days} days (Limit: {ce_thresh})")
+            if pd.notna(start_date):
+                days = (now_utc - pd.to_datetime(start_date, utc=True)).days
+                if days > ce_thresh:
+                    reasons.append(f"Exam in-progress for {days} days (Limit: {ce_thresh})")
 
-    if row.get("capstone_display") == "In-Progress":
-        start_date = row.get("cap_started_at") if pd.notna(row.get("cap_started_at")) else row.get("cap_updated_at")
+        if row.get("capstone_display") == "In-Progress":
+            start_date = row.get("cap_started_at") if pd.notna(row.get("cap_started_at")) else row.get("cap_updated_at")
 
-        if pd.notna(start_date):
-            days = (now_utc - pd.to_datetime(start_date, utc=True)).days
-            if days > cap_thresh:
-                reasons.append(f"Capstone in-progress for {days} days (Limit: {cap_thresh})")
+            if pd.notna(start_date):
+                days = (now_utc - pd.to_datetime(start_date, utc=True)).days
+                if days > cap_thresh:
+                    reasons.append(f"Capstone in-progress for {days} days (Limit: {cap_thresh})")
 
-    return " | ".join(reasons) if reasons else ""
+        return " | ".join(reasons) if reasons else ""
 
-    df['risk_details'] = df.apply(calculate_risk, axis=1)
-    df['is_at_risk'] = df['risk_details'] != ""
-    df['risk_flag'] = df['is_at_risk'].apply(lambda x: "At Risk" if x else "On Track")
+    df["risk_details"] = df.apply(calculate_risk, axis=1)
+    df["is_at_risk"] = df["risk_details"] != ""
+    df["risk_flag"] = df["is_at_risk"].apply(lambda x: "At Risk" if x else "On Track")
 
     # Time parsing
     def to_manila_time(series):
         dt = pd.to_datetime(series, errors="coerce")
-        if dt.dt.tz is None: dt = dt.dt.tz_localize("UTC")
+        if dt.dt.tz is None:
+            dt = dt.dt.tz_localize("UTC")
         return dt.dt.tz_convert("Asia/Manila").dt.strftime("%B %d, %Y at %I:%M %p")
 
     if "updated_at" in df.columns and df["updated_at"].notna().any():
