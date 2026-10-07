@@ -7,3 +7,4 @@ plotly
 streamlit-aggrid
 reportlab
 matplotlib
+openpyxl
