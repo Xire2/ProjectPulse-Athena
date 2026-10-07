@@ -15,7 +15,104 @@ import os
 
 # Generic title
 st.set_page_config(page_title="Project Pulse — Program Dashboard", page_icon="🎓", layout="wide")
+st.markdown("""
+<style>
+/* ---------- RESPONSIVE DASHBOARD ---------- */
 
+[data-testid="stAppViewContainer"] .main .block-container {
+    width: 100%;
+    max-width: 1800px;
+    padding-left: clamp(1rem, 2vw, 3rem);
+    padding-right: clamp(1rem, 2vw, 3rem);
+}
+
+div[data-testid="stHorizontalBlock"] {
+    min-width: 0;
+}
+
+div[data-testid="stHorizontalBlock"] > div {
+    min-width: 0;
+}
+
+div[data-testid="stMetric"] {
+    min-width: 0;
+    overflow: hidden;
+}
+
+div[data-testid="stMetricLabel"],
+div[data-testid="stMetricValue"],
+div[data-testid="stMetricDelta"] {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+div[data-testid="stMetricValue"] div {
+    max-width: 100%;
+}
+
+.stButton button,
+.stDownloadButton button {
+    min-height: 42px;
+    white-space: normal !important;
+    overflow-wrap: anywhere;
+}
+
+[data-testid="stDataFrame"],
+[data-testid="stTable"] {
+    width: 100%;
+}
+div[data-testid="stPlotlyChart"] {
+    width: 100% !important;
+    max-width: 100% !important;
+}
+
+div[data-testid="stVerticalBlockBorderWrapper"] {
+    min-width: 0 !important;
+    max-width: 100% !important;
+}
+
+@media (max-width: 1100px) {
+    div[data-testid="stMetricValue"] div {
+        font-size: 1.7rem !important;
+    }
+
+    div[data-testid="stMetricLabel"] p {
+        font-size: 0.7rem !important;
+    }
+}
+
+@media (max-width: 768px) {
+    [data-testid="stAppViewContainer"] .main .block-container {
+        padding-left: 0.75rem;
+        padding-right: 0.75rem;
+    }
+
+    div[data-testid="stMetricValue"] div {
+        font-size: 1.5rem !important;
+    }
+
+    div[data-testid="stMetricLabel"] p {
+        font-size: 0.68rem !important;
+        line-height: 1.2 !important;
+    }
+
+    h1, h2, h3, h4 {
+        overflow-wrap: anywhere;
+    }
+
+    .stButton button,
+    .stDownloadButton button {
+        min-height: 44px;
+    }
+}
+
+@media (max-width: 600px) {
+    div[data-testid="stMetricValue"] div {
+        font-size: 1.35rem !important;
+    }
+}
+</style>
+""", unsafe_allow_html=True)
 # ------------------------------------------------------------------
 # ETHICAL VISUALIZATION SPECIFICATION & THRESHOLDS
 # ------------------------------------------------------------------
@@ -847,16 +944,108 @@ def render_student_list(df_all):
         .roster-th { font-size: 0.85rem; font-weight: 700; color: #666; text-transform: uppercase; }
         .roster-th-divider { border-bottom: 2px solid #ddd; margin: 0.5rem 0 1rem 0; }
         .roster-row-divider { border-bottom: 1px solid #eee; margin: 0.5rem 0; }
-        .roster-cell-text, .roster-cell-id { font-size: 0.9rem; color: var(--text-color); }
+        .roster-cell-text, .roster-cell-id { font-size: 0.9rem; color: var(--text-color); overflow-wrap: anywhere; word-break: break-word; }
+    
         .status-pill { background-color: #f0f2f6; padding: 4px 8px; border-radius: 12px; font-size: 0.8rem; color: #31333F !important; font-weight: 600; }
         .sr-risk-pill { background-color: #D500001A; color: #D50000; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
         .sr-risk-none { background-color: #0080001A; color: #008000; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
-        
-        /* Force standard buttons to allow multi-line text */
+    
+        .roster-row-marker, .roster-header-marker {
+            display: none !important;
+        }
+    
+        div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) {
+            border-radius: 6px !important;
+            padding: 6px 4px !important;
+        }
+    
+        div[data-testid="stHorizontalBlock"]:has(.roster-row-marker):has(.sr-risk-pill) {
+            background-color: #D500001A !important;
+            border-left: 4px solid #D50000 !important;
+        }
+    
         div[data-testid="stButton"] button p {
             white-space: normal !important;
             line-height: 1.2 !important;
             text-align: center !important;
+        }
+    
+        @media (max-width: 1100px) {
+            .roster-th { font-size: 0.72rem; }
+            .roster-cell-text, .roster-cell-id { font-size: 0.82rem; }
+            .sr-risk-pill, .sr-risk-none { font-size: 0.72rem; padding: 3px 5px; }
+        }
+    
+        @media (max-width: 768px) {
+            div[data-testid="stHorizontalBlock"]:has(.roster-header-marker) {
+                display: none !important;
+            }
+    
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) {
+                display: grid !important;
+                grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+                gap: 8px 12px !important;
+                padding: 12px 10px !important;
+                margin-bottom: 8px !important;
+                border: 1px solid var(--secondary-background-color) !important;
+                border-left: 4px solid transparent !important;
+                background-color: var(--background-color) !important;
+            }
+    
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker):has(.sr-risk-pill) {
+                background-color: #D500001A !important;
+                border-left: 4px solid #D50000 !important;
+            }
+    
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div {
+                min-width: 0 !important;
+                width: 100% !important;
+            }
+    
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(1)::before { content: "STUDENT ID"; }
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(2)::before { content: "NAME"; }
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(3)::before { content: "COHORT"; }
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(4)::before { content: "ADVISER"; }
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(5)::before { content: "COURSEWORK"; }
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(6)::before { content: "COMP EXAM"; }
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(7)::before { content: "CAPSTONE"; }
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(8)::before { content: "LAST UPDATE"; }
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(9)::before { content: "RISK"; }
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(10)::before { content: "ACTION"; }
+    
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div::before {
+                display: block;
+                font-size: 0.65rem;
+                font-weight: 700;
+                color: #777;
+                letter-spacing: 0.4px;
+                margin-bottom: 3px;
+            }
+    
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) .roster-cell-text,
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) .roster-cell-id {
+                font-size: 0.85rem;
+            }
+    
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) .sr-risk-pill,
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) .sr-risk-none {
+                display: inline-block;
+                font-size: 0.72rem;
+            }
+    
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) .stButton button {
+                min-height: 42px;
+            }
+    
+            .roster-row-divider {
+                display: none;
+            }
+        }
+    
+        @media (max-width: 480px) {
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) {
+                grid-template-columns: 1fr !important;
+            }
         }
         </style>
         """,
@@ -866,55 +1055,91 @@ def render_student_list(df_all):
     # Helper function to reuse the exact same grid layout across multiple pages
     def render_roster_grid(display_df, key_prefix):
         col_widths = [0.9, 1.5, 0.8, 1.5, 1.2, 1.2, 1.4, 0.9, 0.9, 0.8]
-        header_labels = [
-            "STUDENT ID", "NAME", "COHORT", "ADVISER",
-            "COURSEWORK", "COMP EXAM", "CAPSTONE", "LAST UPDATE", "RISK", "ACTION"
-        ]
-
+        header_labels = ["STUDENT ID", "NAME", "COHORT", "ADVISER", "COURSEWORK", "COMP EXAM", "CAPSTONE", "LAST UPDATE", "RISK", "ACTION"]
+    
         header_cols = st.columns(col_widths, vertical_alignment="center")
+        header_cols[0].markdown('<span class="roster-header-marker"></span>', unsafe_allow_html=True)
+    
         for col, label in zip(header_cols, header_labels):
             col.markdown(f'<div class="roster-th">{label}</div>', unsafe_allow_html=True)
+    
         st.markdown('<div class="roster-th-divider"></div>', unsafe_allow_html=True)
-
-        if display_df.empty:
-            st.info("No students match the current filters.")
-        else:
-            with st.container(border=False, height=500):
-                for row in display_df.to_dict("records"):
-                    r_cols = st.columns(col_widths, vertical_alignment="center")
-                    
-                    r_cols[0].markdown(f'<span class="roster-cell-id">{row.get("Student ID", "")}</span>', unsafe_allow_html=True)
-                    r_cols[1].markdown(f'<span class="roster-cell-text" style="font-weight: bold;">{row.get("Name", "")}</span>', unsafe_allow_html=True)
-                    r_cols[2].markdown(f'<span class="roster-cell-text">{row.get("Cohort", "")}</span>', unsafe_allow_html=True)
-                    r_cols[3].markdown(f'<span class="roster-cell-text">{row.get("Adviser", "")}</span>', unsafe_allow_html=True)
-                    
-                    r_cols[4].markdown(get_stage_badge("coursework", row.get("Coursework", "")), unsafe_allow_html=True)
-                    r_cols[5].markdown(get_stage_badge("comprehensive_exam", row.get("Comprehensive Exam", "")), unsafe_allow_html=True)
-                    r_cols[6].markdown(get_stage_badge("capstone", row.get("Capstone", "")), unsafe_allow_html=True)
-                    
-                    last_upd = row.get("Last Update", "")
-                    display_date = last_upd if str(last_upd).strip() != "N/A" else "—"
-                    r_cols[7].markdown(f'<span class="roster-cell-text">{display_date}</span>', unsafe_allow_html=True)
-                    
-                    risk_status = str(row.get("Risk Status", ""))
-                    if risk_status.strip() == "Flagged":
-                        r_cols[8].markdown('<span class="sr-risk-pill">FLAGGED</span>', unsafe_allow_html=True)
-                    else:
-                        r_cols[8].markdown('<span class="sr-risk-none">ON TRACK</span>', unsafe_allow_html=True)
-                    
-                    with r_cols[9]:
-                        # Using on_click completely circumvents the instantiation error
-                        st.button(
-                            "**View\nProfile**", 
-                            key=f"view_{key_prefix}_{row.get('Student ID', '')}", 
-                            use_container_width=True, 
-                            on_click=go_to_profile, 
-                            args=(row.get("Email", ""),)
-                        )
-                    
-                    st.markdown('<div class="roster-row-divider"></div>', unsafe_allow_html=True)
-
-            st.caption(f"Showing {len(display_df)} students.")
+    
+        for _, row in display_df.iterrows():
+            is_at_risk = str(row.get("Risk Status", "")).strip() == "Flagged"
+    
+            r_cols = st.columns(col_widths, vertical_alignment="center")
+    
+            r_cols[0].markdown('<span class="roster-row-marker"></span>', unsafe_allow_html=True)
+    
+            r_cols[0].markdown(
+                f'<span class="roster-cell-id">{row.get("Student ID", "")}</span>',
+                unsafe_allow_html=True
+            )
+    
+            r_cols[1].markdown(
+                f'<span class="roster-cell-text">{row.get("Name", "")}</span>',
+                unsafe_allow_html=True
+            )
+    
+            r_cols[2].markdown(
+                f'<span class="roster-cell-text">{row.get("Cohort", "")}</span>',
+                unsafe_allow_html=True
+            )
+    
+            r_cols[3].markdown(
+                f'<span class="roster-cell-text">{row.get("Adviser", "")}</span>',
+                unsafe_allow_html=True
+            )
+    
+            r_cols[4].markdown(
+                get_stage_badge("coursework", row.get("Coursework", "")),
+                unsafe_allow_html=True
+            )
+    
+            r_cols[5].markdown(
+                get_stage_badge("comprehensive_exam", row.get("Comprehensive Exam", "")),
+                unsafe_allow_html=True
+            )
+    
+            r_cols[6].markdown(
+                get_stage_badge("capstone", row.get("Capstone", "")),
+                unsafe_allow_html=True
+            )
+    
+            last_upd = row.get("Last Update", "")
+            display_date = last_upd if str(last_upd).strip() != "N/A" else "—"
+    
+            r_cols[7].markdown(
+                f'<span class="roster-cell-text">{display_date}</span>',
+                unsafe_allow_html=True
+            )
+    
+            risk_status = str(row.get("Risk Status", "")).strip()
+    
+            if risk_status == "Flagged":
+                r_cols[8].markdown(
+                    '<span class="sr-risk-pill">AT RISK</span>',
+                    unsafe_allow_html=True
+                )
+            else:
+                r_cols[8].markdown(
+                    '<span class="sr-risk-none">ON TRACK</span>',
+                    unsafe_allow_html=True
+                )
+    
+            with r_cols[9]:
+                st.button(
+                    "**View\nProfile**",
+                    key=f"view_{key_prefix}_{row.get('Student ID', '')}",
+                    use_container_width=True,
+                    on_click=go_to_profile,
+                    args=(row.get("Email", ""),)
+                )
+    
+            st.markdown('<div class="roster-row-divider"></div>', unsafe_allow_html=True)
+    
+        st.caption(f"Showing {len(display_df)} students.")
 
     # Standardize data preparation for the grids
     def format_for_grid(df_subset):
