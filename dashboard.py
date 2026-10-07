@@ -675,8 +675,8 @@ for opt in core_nav_options:
             key="nav_btn_add_data",
             use_container_width=True
         ):
-        st.session_state.admin_view = "Add Data"
-        st.rerun()
+            st.session_state.admin_view = "Add Data"
+            st.rerun()
 st.markdown(
     """
     <style>
