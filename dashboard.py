@@ -848,6 +848,7 @@ def render_student_list(df_all):
         .roster-th-divider { border-bottom: 2px solid #ddd; margin: 0.5rem 0 1rem 0; }
         .roster-row-divider { border-bottom: 1px solid #eee; margin: 0.5rem 0; }
         .roster-cell-text, .roster-cell-id { font-size: 0.9rem; color: var(--text-color); }
+        .sr-at-risk-cell { background-color: #D500001A; border-left: 3px solid #D50000; padding: 6px 8px; border-radius: 4px; }
         .status-pill { background-color: #f0f2f6; padding: 4px 8px; border-radius: 12px; font-size: 0.8rem; color: #31333F !important; font-weight: 600; }
         .sr-risk-pill { background-color: #D500001A; color: #D50000; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
         .sr-risk-none { background-color: #0080001A; color: #008000; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
@@ -882,23 +883,24 @@ def render_student_list(df_all):
             with st.container(border=False, height=500):
                 for row in display_df.to_dict("records"):
                     r_cols = st.columns(col_widths, vertical_alignment="center")
+                    is_at_risk = str(row.get("Risk Status", "")).strip() == "Flagged"
+                    risk_class = "sr-at-risk-cell" if is_at_risk else ""
+                    r_cols[0].markdown(f'<div class="{risk_class}"><span class="roster-cell-id">{row.get("Student ID", "")}</span></div>', unsafe_allow_html=True)
+                    r_cols[1].markdown(f'<div class="{risk_class}"><span class="roster-cell-text" style="font-weight: bold;">{row.get("Name", "")}</span></div>', unsafe_allow_html=True)
+                    r_cols[2].markdown(f'<div class="{risk_class}"><span class="roster-cell-text">{row.get("Cohort", "")}</span></div>', unsafe_allow_html=True)
+                    r_cols[3].markdown(f'<div class="{risk_class}"><span class="roster-cell-text">{row.get("Adviser", "")}</span></div>', unsafe_allow_html=True)
                     
-                    r_cols[0].markdown(f'<span class="roster-cell-id">{row.get("Student ID", "")}</span>', unsafe_allow_html=True)
-                    r_cols[1].markdown(f'<span class="roster-cell-text" style="font-weight: bold;">{row.get("Name", "")}</span>', unsafe_allow_html=True)
-                    r_cols[2].markdown(f'<span class="roster-cell-text">{row.get("Cohort", "")}</span>', unsafe_allow_html=True)
-                    r_cols[3].markdown(f'<span class="roster-cell-text">{row.get("Adviser", "")}</span>', unsafe_allow_html=True)
-                    
-                    r_cols[4].markdown(get_stage_badge("coursework", row.get("Coursework", "")), unsafe_allow_html=True)
-                    r_cols[5].markdown(get_stage_badge("comprehensive_exam", row.get("Comprehensive Exam", "")), unsafe_allow_html=True)
-                    r_cols[6].markdown(get_stage_badge("capstone", row.get("Capstone", "")), unsafe_allow_html=True)
+                    r_cols[4].markdown(f'<div class="{risk_class}">{get_stage_badge("coursework", row.get("Coursework", ""))}</div>', unsafe_allow_html=True)
+                    r_cols[5].markdown(f'<div class="{risk_class}">{get_stage_badge("comprehensive_exam", row.get("Comprehensive Exam", ""))}</div>', unsafe_allow_html=True)
+                    r_cols[6].markdown(f'<div class="{risk_class}">{get_stage_badge("capstone", row.get("Capstone", ""))}</div>', unsafe_allow_html=True)
                     
                     last_upd = row.get("Last Update", "")
                     display_date = last_upd if str(last_upd).strip() != "N/A" else "—"
-                    r_cols[7].markdown(f'<span class="roster-cell-text">{display_date}</span>', unsafe_allow_html=True)
+                    r_cols[7].markdown(f'<div class="{risk_class}"><span class="roster-cell-text">{display_date}</span></div>', unsafe_allow_html=True)
                     
                     risk_status = str(row.get("Risk Status", ""))
                     if risk_status.strip() == "Flagged":
-                        r_cols[8].markdown('<span class="sr-risk-pill">FLAGGED</span>', unsafe_allow_html=True)
+                        r_cols[8].markdown('<span class="sr-risk-pill">AT RISK</span>', unsafe_allow_html=True)
                     else:
                         r_cols[8].markdown('<span class="sr-risk-none">ON TRACK</span>', unsafe_allow_html=True)
                     
