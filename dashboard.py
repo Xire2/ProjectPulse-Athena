@@ -97,7 +97,19 @@ div[data-testid="stVerticalBlockBorderWrapper"] {
     min-width: 0 !important;
     max-width: 100% !important;
 }
+@media (min-width: 769px) and (max-width: 1100px) {
+    div[data-testid="stHorizontalBlock"]:not(:has(.roster-row-marker)):not(:has(.roster-header-marker)):not(:has(.roster-scroll-marker)) {
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+    }
 
+    div[data-testid="stHorizontalBlock"]:not(:has(.roster-row-marker)):not(:has(.roster-header-marker)):not(:has(.roster-scroll-marker)) > div {
+        min-width: 0 !important;
+        max-width: 100% !important;
+        flex: 1 1 0% !important;
+    }
+}
 @media (max-width: 1100px) {
     div[data-testid="stMetricValue"] div {
         font-size: 1.7rem !important;
@@ -958,7 +970,7 @@ def render_completion_trend_chart(df_all, active_program):
     )
     
     st.subheader(f"Completion Trend — Last 4 Terms", help="Shows the percentage of students in each cohort who have successfully completed all core coursework.")
-    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False, "responsive": True})
 def create_executive_dashboard_pdf(df_summary, summary_label, last_sync):
     from io import BytesIO
     from reportlab.lib import colors
@@ -1724,7 +1736,7 @@ def render_student_list(df_all):
 
                 # 1. Render Chart and Capture Click
                 chart_event = st.plotly_chart(
-                    fig, width="stretch", config={"displayModeBar": False},
+                    fig, width="stretch", config={"displayModeBar": False, "responsive": True},
                     on_select="rerun", selection_mode="points", key=f"lifecycle_chart_{st.session_state.chart_key_counter}"
                 )
 
