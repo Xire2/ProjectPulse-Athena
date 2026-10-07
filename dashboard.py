@@ -270,7 +270,7 @@ def log_security_event(user_id: int, event_type: str, details: str):
 
 def authenticate_user(username: str, password_attempt: str):
     query = text("""
-        SELECT user_id, username, full_name, role, can_edit, can_import_data, is_active
+        SELECT user_id, username, full_name, role, can_edit, is_active
         FROM app_users
         WHERE username = :u AND password_hash = crypt(:p, password_hash) AND is_active = TRUE;
     """)
@@ -559,8 +559,6 @@ admin_nav_options = ["Global Instance Settings", "Schema Mapping Config", "Permi
 
 # Ensure current view is valid
 all_valid_options = core_nav_options + (admin_nav_options if user["role"] == "IT/Admin" else [])
-if user.get("can_import_data", False):
-    all_valid_options.append("Add Data")
 if st.session_state.admin_view not in all_valid_options: 
     st.session_state.admin_view = "Executive Dashboard"
 
@@ -669,14 +667,7 @@ for opt in core_nav_options:
         if st.session_state.admin_view != opt:
             st.session_state.admin_view = opt
             st.rerun()
-    if user.get("can_import_data", False):
-        if st.sidebar.button(
-            "ADD DATA",
-            key="nav_btn_add_data",
-            use_container_width=True
-        ):
-            st.session_state.admin_view = "Add Data"
-            st.rerun()
+
 st.markdown(
     """
     <style>
@@ -864,52 +855,25 @@ def render_permissions_and_logs():
     t_perms, t_logs, t_syslogs = st.tabs(["User Permissions", "Live Audit Logs", "System Sync Failures"])
     
     with t_perms:
-        users_df = conn.query("SELECT user_id, username, full_name, role, can_edit, can_import_data FROM app_users ORDER BY user_id;", ttl=0)
+        users_df = conn.query("SELECT user_id, username, full_name, role, can_edit FROM app_users ORDER BY user_id;", ttl=0)
         st.dataframe(users_df, hide_index=True, use_container_width=True)
 
-        st.markdown("##### ✏️ Modify User Permissions")
+        st.markdown("##### ✏️ Modify User Edit Permissions")
         with st.form("admin_perm_form"):
             target_username = st.selectbox("Select User Account", users_df["username"].tolist())
-        
-            selected_user = users_df[users_df["username"] == target_username].iloc[0]
-        
-            new_can_edit = st.checkbox(
-                "Grant Write / Edit Capability",
-                value=bool(selected_user["can_edit"])
-            )
-        
-            new_can_import = st.checkbox(
-                "Grant Add Data Access",
-                value=bool(selected_user["can_import_data"])
-            )
-        
+            new_can_edit = st.checkbox("Grant Write / Edit Capability")
+            
             if st.form_submit_button("Update Access Level"):
                 try:
                     with conn.session as s:
                         s.execute(
-                            text("""
-                                UPDATE app_users
-                                SET can_edit = :ce,
-                                    can_import_data = :ci
-                                WHERE username = :u;
-                            """),
-                            {
-                                "ce": new_can_edit,
-                                "ci": new_can_import,
-                                "u": target_username
-                            }
+                            text("UPDATE app_users SET can_edit = :ce WHERE username = :u;"),
+                            {"ce": new_can_edit, "u": target_username}
                         )
                         s.commit()
-        
-                    log_security_event(
-                        user["user_id"],
-                        "PERMISSIONS_UPDATED",
-                        f"Updated permissions for '{target_username}': can_edit={new_can_edit}, can_import_data={new_can_import}."
-                    )
-        
+                    log_security_event(user["user_id"], "PERMISSIONS_UPDATED", f"Set can_edit={new_can_edit} for user '{target_username}'.")
                     st.success(f"Permissions successfully updated for {target_username}.")
                     st.rerun()
-        
                 except Exception as ex:
                     st.error(f"Error updating permissions: {ex}")
 
