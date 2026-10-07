@@ -7,7 +7,6 @@ Streamlit app for Program Chairs, Faculty/Program Advisors, and the Dean.
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.io as pio
 from sqlalchemy import text
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -939,6 +938,12 @@ def render_completion_trend_chart(df_all, active_program):
     st.subheader(f"Completion Trend — Last 4 Terms", help="Shows the percentage of students in each cohort who have successfully completed all core coursework.")
     st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 def create_executive_dashboard_pdf(df_summary, summary_label, last_sync):
+    from io import BytesIO
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import landscape, A4
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet
+
     total_students = len(df_summary)
     cw_completed = len(df_summary[df_summary["coursework_display"] == "Completed"])
     exam_passed = len(df_summary[df_summary["comprehensive_exam_display"] == "Passed"])
@@ -989,144 +994,6 @@ def create_executive_dashboard_pdf(df_summary, summary_label, last_sync):
         ]
     )
 
-    stage_df = pd.DataFrame({
-        "Lifecycle Stage": [
-            "Overall Completion",
-            "Capstone",
-            "Comprehensive Exam",
-            "Coursework"
-        ],
-        "Students": [
-            fully_completed,
-            current_cap,
-            current_ce,
-            current_cw
-        ]
-    })
-
-    stage_df["Percentage"] = (
-        stage_df["Students"] / total_students * 100
-        if total_students > 0 else 0
-    )
-
-    lifecycle_fig = px.bar(
-        stage_df,
-        x="Percentage",
-        y="Lifecycle Stage",
-        orientation="h",
-        text="Percentage",
-        range_x=[0, 100],
-        labels={
-            "Percentage": "Percentage of Active Students",
-            "Lifecycle Stage": ""
-        }
-    )
-
-    lifecycle_fig.update_traces(
-        marker_color=["#0DC249", "#D50000", "#FFAE00", "#0072B2"],
-        texttemplate="%{text:.2f}%",
-        textposition="outside"
-    )
-
-    lifecycle_fig.update_layout(
-        height=300,
-        margin=dict(l=10, r=40, t=20, b=10),
-        xaxis=dict(range=[0, 100], ticksuffix="%", dtick=20),
-        yaxis=dict(
-            categoryorder="array",
-            categoryarray=[
-                "Overall Completion",
-                "Capstone",
-                "Comprehensive Exam",
-                "Coursework"
-            ]
-        ),
-        showlegend=False,
-        paper_bgcolor="white",
-        plot_bgcolor="white"
-    )
-
-    trend_source = df_summary.copy()
-    trend_source["is_completed"] = (
-        trend_source["coursework_display"] == "Completed"
-    )
-
-    trend_df = trend_source.groupby("cohort").agg(
-        total_students=("coursework_display", "count"),
-        completed_students=("is_completed", "sum")
-    ).reset_index()
-
-    trend_df["completion_rate"] = (
-        trend_df["completed_students"] /
-        trend_df["total_students"] * 100
-    )
-
-    trend_df["sort_year"] = (
-        trend_df["cohort"]
-        .astype(str)
-        .str.extract(r"[TQ](\d{2})")
-        .astype(float)
-    )
-
-    trend_df["sort_term"] = (
-        trend_df["cohort"]
-        .astype(str)
-        .str.extract(r"^(\d)[TQ]")
-        .astype(float)
-    )
-
-    trend_df = (
-        trend_df
-        .dropna(subset=["sort_year", "sort_term"])
-        .sort_values(by=["sort_year", "sort_term"])
-        .tail(4)
-    )
-
-    trend_fig = px.line(
-        trend_df,
-        x="cohort",
-        y="completion_rate",
-        markers=True,
-        text="completion_rate",
-        labels={
-            "cohort": "Academic Term",
-            "completion_rate": "Completion Rate (%)"
-        }
-    )
-
-    trend_fig.update_layout(
-        height=300,
-        margin=dict(l=10, r=10, t=20, b=10),
-        yaxis=dict(range=[-5, 115]),
-        xaxis=dict(title="Academic Term"),
-        yaxis_title="Completion Rate (%)",
-        hovermode="x unified"
-    )
-
-    trend_fig.update_traces(
-        line_color="#D50000",
-        marker=dict(color="#FFAE00", size=8),
-        line_width=3,
-        texttemplate="%{text:.1f}%",
-        textposition="top center"
-    )
-
-    lifecycle_png = pio.to_image(
-        lifecycle_fig,
-        format="png",
-        width=850,
-        height=300,
-        scale=2
-    )
-
-    trend_png = pio.to_image(
-        trend_fig,
-        format="png",
-        width=850,
-        height=300,
-        scale=2
-    )
-
     pdf_buffer = BytesIO()
 
     doc = SimpleDocTemplate(
@@ -1143,7 +1010,7 @@ def create_executive_dashboard_pdf(df_summary, summary_label, last_sync):
 
     story.append(
         Paragraph(
-            f"<b>Project Pulse — Executive Dashboard</b>",
+            "<b>Project Pulse — Executive Dashboard</b>",
             styles["Title"]
         )
     )
@@ -1162,7 +1029,7 @@ def create_executive_dashboard_pdf(df_summary, summary_label, last_sync):
         )
     )
 
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 10))
 
     kpi_data = [
         [
@@ -1187,10 +1054,7 @@ def create_executive_dashboard_pdf(df_summary, summary_label, last_sync):
         ]
     ]
 
-    kpi_table = Table(
-        kpi_data,
-        colWidths=[85] * 8
-    )
+    kpi_table = Table(kpi_data, colWidths=[85] * 8)
 
     kpi_table.setStyle(
         TableStyle([
@@ -1204,48 +1068,151 @@ def create_executive_dashboard_pdf(df_summary, summary_label, last_sync):
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#DDDDDD")),
             ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#DDDDDD")),
+            ("TOPPADDING", (0, 0), (-1, -1), 8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ])
+    )
+
+    story.append(kpi_table)
+    story.append(Spacer(1, 12))
+
+    # ---------- LIFECYCLE BREAKDOWN ----------
+    lifecycle_data = [
+        ["Lifecycle Stage", "Students", "Percentage"],
+        [
+            "Overall Completion",
+            str(fully_completed),
+            f"{(fully_completed / total_students * 100) if total_students else 0:.1f}%"
+        ],
+        [
+            "Capstone",
+            str(current_cap),
+            f"{(current_cap / total_students * 100) if total_students else 0:.1f}%"
+        ],
+        [
+            "Comprehensive Exam",
+            str(current_ce),
+            f"{(current_ce / total_students * 100) if total_students else 0:.1f}%"
+        ],
+        [
+            "Coursework",
+            str(current_cw),
+            f"{(current_cw / total_students * 100) if total_students else 0:.1f}%"
+        ]
+    ]
+
+    lifecycle_table = Table(
+        lifecycle_data,
+        colWidths=[150, 80, 90]
+    )
+
+    lifecycle_table.setStyle(
+        TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F2F2F2")),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#DDDDDD")),
             ("TOPPADDING", (0, 0), (-1, -1), 7),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
         ])
     )
 
-    story.append(kpi_table)
-    story.append(Spacer(1, 8))
-
-    chart_table = Table(
-        [
-            [
-                Image(BytesIO(lifecycle_png), width=365, height=129),
-                Image(BytesIO(trend_png), width=365, height=129)
-            ]
-        ],
-        colWidths=[380, 380]
+    # ---------- COMPLETION TREND ----------
+    trend_source = df_summary.copy()
+    trend_source["is_completed"] = (
+        trend_source["coursework_display"] == "Completed"
     )
 
-    chart_table.setStyle(
+    trend_df = trend_source.groupby("cohort").agg(
+        total_students=("coursework_display", "count"),
+        completed_students=("is_completed", "sum")
+    ).reset_index()
+
+    if not trend_df.empty:
+        trend_df["completion_rate"] = (
+            trend_df["completed_students"] /
+            trend_df["total_students"] * 100
+        )
+
+        trend_df["sort_year"] = (
+            trend_df["cohort"]
+            .astype(str)
+            .str.extract(r"[TQ](\d{2})")
+            .astype(float)
+        )
+
+        trend_df["sort_term"] = (
+            trend_df["cohort"]
+            .astype(str)
+            .str.extract(r"^(\d)[TQ]")
+            .astype(float)
+        )
+
+        trend_df = (
+            trend_df
+            .dropna(subset=["sort_year", "sort_term"])
+            .sort_values(["sort_year", "sort_term"])
+            .tail(4)
+        )
+
+    trend_data = [["Academic Term", "Completion Rate"]]
+
+    if not trend_df.empty:
+        for _, row in trend_df.iterrows():
+            trend_data.append([
+                str(row["cohort"]),
+                f"{row['completion_rate']:.1f}%"
+            ])
+    else:
+        trend_data.append(["No trend data", "N/A"])
+
+    trend_table = Table(
+        trend_data,
+        colWidths=[150, 120]
+    )
+
+    trend_table.setStyle(
+        TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F2F2F2")),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#DDDDDD")),
+            ("TOPPADDING", (0, 0), (-1, -1), 7),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ])
+    )
+
+    chart_tables = Table(
+        [[lifecycle_table, trend_table]],
+        colWidths=[400, 400]
+    )
+
+    chart_tables.setStyle(
         TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("ALIGN", (0, 0), (-1, -1), "CENTER"),
         ])
     )
 
-    story.append(chart_table)
-    story.append(Spacer(1, 6))
-
-    risk_text = (
-        f"<b>At-Risk Students:</b> {at_risk_count} "
-        f"student(s) currently exceed the expected duration threshold "
-        f"for their current lifecycle stage."
-    )
-
-    story.append(Paragraph(risk_text, styles["Normal"]))
-
-    story.append(Spacer(1, 4))
+    story.append(chart_tables)
+    story.append(Spacer(1, 12))
 
     story.append(
         Paragraph(
-            "Mapúa University · ETYSB Success Advisor Dashboard · "
-            "Leadership Meeting View",
+            f"<b>At-Risk Students:</b> {at_risk_count} student(s) currently "
+            "exceed the expected duration threshold for their current lifecycle stage.",
+            styles["Normal"]
+        )
+    )
+
+    story.append(Spacer(1, 6))
+
+    story.append(
+        Paragraph(
+            "Mapúa University · ETYSB Success Advisor Dashboard · Leadership Meeting View",
             styles["Normal"]
         )
     )
