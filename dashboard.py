@@ -61,6 +61,15 @@ div[data-testid="stMetricValue"] div {
 [data-testid="stTable"] {
     width: 100%;
 }
+div[data-testid="stPlotlyChart"] {
+    width: 100% !important;
+    max-width: 100% !important;
+}
+
+div[data-testid="stVerticalBlockBorderWrapper"] {
+    min-width: 0 !important;
+    max-width: 100% !important;
+}
 
 @media (max-width: 1100px) {
     div[data-testid="stMetricValue"] div {
