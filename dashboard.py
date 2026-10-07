@@ -32,11 +32,12 @@ st.markdown("""
 }
 
 div[data-testid="stHorizontalBlock"] {
-    min-width: 0;
+    min-width: 0 !important;
+    max-width: 100% !important;
 }
-
 div[data-testid="stHorizontalBlock"] > div {
-    min-width: 0;
+    min-width: 0 !important;
+    max-width: 100% !important;
 }
 
 div[data-testid="stMetric"] {
@@ -67,11 +68,13 @@ div[data-testid="stMetricValue"] div {
     width: 100%;
 }
 
-div[data-testid="stPlotlyChart"] {
+div[data-testid="stPlotlyChart"],
+div[data-testid="stPlotlyChart"] > div,
+div[data-testid="stPlotlyChart"] iframe {
     width: 100% !important;
     max-width: 100% !important;
     min-width: 0 !important;
-    overflow-x: hidden !important;
+    overflow: hidden !important;
 }
 
 div[data-testid="stVerticalBlockBorderWrapper"] {
