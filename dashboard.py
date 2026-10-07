@@ -502,20 +502,20 @@ def validate_import_dataframe(df, detected_columns, course_columns):
     student_column = detected_columns.get("student_number")
 
     if not student_column:
-    errors.append({
-        "row": "—",
-        "student_number": "—",
-        "column": "Student Number",
-        "current_value": "Missing column",
-        "severity": "Error",
-        "message": "A student number column could not be detected.",
-        "row_index": None,
-        "type": "missing_column"
-    })
-    else:
-        for index, value in working_df[student_column].items():
-            if value is None or str(value).strip() == "":
-                add_issue(index, student_column, "Error", "Student number is required.")
+        errors.append({
+            "row": "—",
+            "student_number": "—",
+            "column": "Student Number",
+            "current_value": "Missing column",
+            "severity": "Error",
+            "message": "A student number column could not be detected.",
+            "row_index": None,
+            "type": "missing_column"
+        })
+        else:
+            for index, value in working_df[student_column].items():
+                if value is None or str(value).strip() == "":
+                    add_issue(index, student_column, "Error", "Student number is required.")
 
     warning_fields = {
         "adviser": "Missing adviser.",
