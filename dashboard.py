@@ -276,6 +276,62 @@ def load_dashboard_config():
 
 ACTIVE_PROGRAM, CURRENT_TERM_LABEL = load_dashboard_config()
 
+# --- DYNAMIC UI & KPI CONFIG LOADERS ---
+def init_config_tables():
+    try:
+        with conn.session as s:
+            s.execute(text("""
+                CREATE TABLE IF NOT EXISTS custom_terminology (
+                    program_code VARCHAR(50), standard_term VARCHAR(50), custom_term VARCHAR(50),
+                    PRIMARY KEY (program_code, standard_term)
+                );
+            """))
+            s.execute(text("""
+                CREATE TABLE IF NOT EXISTS kpi_config (
+                    program_code VARCHAR(50), kpi_key VARCHAR(50), custom_label VARCHAR(50),
+                    is_active BOOLEAN DEFAULT TRUE, display_order INT,
+                    PRIMARY KEY (program_code, kpi_key)
+                );
+            """))
+            s.commit()
+    except Exception:
+        pass
+
+init_config_tables()
+
+@st.cache_data(ttl=60)
+def load_terminology(active_prog):
+    default_terms = {"Coursework": "Coursework", "Comprehensive Exam": "Comprehensive Exam", "Capstone": "Capstone"}
+    try:
+        query = text("SELECT standard_term, custom_term FROM custom_terminology WHERE program_code = :p")
+        with conn.session as s:
+            res = s.execute(query, {"p": active_prog}).fetchall()
+        for row in res:
+            if row[1]: default_terms[row[0]] = row[1]
+    except Exception: pass
+    return default_terms
+
+@st.cache_data(ttl=60)
+def load_kpi_config(active_prog):
+    default_kpis = [
+        {"kpi_key": "Total Students", "custom_label": "Total Students", "is_active": True, "display_order": 1},
+        {"kpi_key": "On-Time Grad Rate", "custom_label": "On-Time Grad Rate", "is_active": True, "display_order": 2},
+        {"kpi_key": "Overall Completion", "custom_label": "Overall Completion", "is_active": True, "display_order": 3},
+        {"kpi_key": "Remaining Students", "custom_label": "Remaining Students", "is_active": True, "display_order": 4},
+        {"kpi_key": "Students At Risk", "custom_label": "Students At Risk", "is_active": True, "display_order": 5},
+    ]
+    try:
+        query = text("SELECT kpi_key, custom_label, is_active, display_order FROM kpi_config WHERE program_code = :p ORDER BY display_order")
+        with conn.session as s:
+            res = s.execute(query, {"p": active_prog}).fetchall()
+        if res:
+            return [{"kpi_key": r[0], "custom_label": r[1], "is_active": r[2], "display_order": r[3]} for r in res]
+    except Exception: pass
+    return default_kpis
+
+TERM_MAP = load_terminology(ACTIVE_PROGRAM)
+KPI_CONFIG = load_kpi_config(ACTIVE_PROGRAM)
+
 # ------------------------------------------------------------------
 # DATA LOADERS (DYNAMICALLY MAPPED & FILTERED BY PROGRAM)
 # ------------------------------------------------------------------
@@ -479,24 +535,122 @@ def go_to_list():
 # VIEW: LOGIN PAGE
 # ------------------------------------------------------------------
 def render_login_page():
+    import base64
+    import os
+
+    # Helper function to convert local images to Base64
+    def get_base64_img(file_path):
+        if os.path.exists(file_path):
+            with open(file_path, "rb") as f:
+                return base64.b64encode(f.read()).decode()
+        else:
+            st.error(f"🚨 Image not found: `{file_path}`. Please verify the exact spelling, capitalization, and extension.")
+            return ""
+
+    bg_mapua = get_base64_img("Mapua.jpg")
+    bg_asu = get_base64_img("asu.jpeg")
+
     st.markdown(
-        """
+        f"""
         <style>
-        .stButton > button[kind="primary"] { background-color: #b92b27 !important; border-color: #b92b27 !important; color: white !important; }
-        .stButton > button[kind="primary"] p, .stButton > button[kind="primary"] span { color: white !important; }
-        .stButton > button[kind="primary"]:hover { background-color: #FF4B4B !important; border-color: #FF4B4B !important; color: white !important; }
+        /* 1. App Backgrounds */
+        .stApp, .stApp > header, [data-testid="stAppViewContainer"] {{
+            background-color: transparent !important;
+            background: transparent !important;
+        }}
+        
+        /* 2. Fullscreen Background Slider */
+        .bg-slider {{
+            position: fixed;
+            top: 0; left: 0; width: 100vw; height: 100vh;
+            z-index: -1; 
+            background-color: #111318; 
+        }}
+        .bg-slider .slide {{
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background-size: cover;
+            background-position: center;
+            opacity: 0; 
+            animation: crossfade 20s infinite;
+        }}
+        .bg-slider .slide:nth-child(1) {{
+            background-image: url("data:image/jpeg;base64,{bg_mapua}");
+            animation-delay: 0s;
+        }}
+        .bg-slider .slide:nth-child(2) {{
+            background-image: url("data:image/jpeg;base64,{bg_asu}");
+            animation-delay: 10s;
+        }}
+        @keyframes crossfade {{
+            0%   {{ opacity: 1; }}
+            40%  {{ opacity: 1; }}
+            50%  {{ opacity: 0; }}
+            90%  {{ opacity: 0; }}
+            100% {{ opacity: 1; }}
+        }}
+        
+        /* 3. Even Blur Overlay */
+        .blur-overlay {{
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            background-color: rgba(0, 0, 0, 0.35); /* Darken the background globally to make text pop */
+            z-index: 2;
+        }}
+        
+        /* --- NEW: BULLETPROOF TEXT SHADOWS --- */
+        /* Apply heavy text shadows to all text inside the login area so it remains visible */
+        div[data-testid="stVerticalBlock"] p, 
+        div[data-testid="stVerticalBlock"] label, 
+        div[data-testid="stVerticalBlock"] h3,
+        div[data-testid="stVerticalBlock"] .stMarkdown {{
+            color: #ffffff !important;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.9), 0px 0px 8px rgba(0,0,0,1.0) !important;
+            font-weight: 600 !important;
+        }}
+
+        /* Login Button (Solid Red, White Text) */
+        .stButton > button[kind="primary"] {{
+            background-color: #b92b27 !important;
+            color: #ffffff !important;
+            border: 1px solid #90201d !important;
+            border-radius: 8px !important;
+            font-weight: bold !important;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.4) !important;
+        }}
+        .stButton > button[kind="primary"]:hover {{
+            background-color: #d1302b !important;
+            border-color: #d1302b !important;
+        }}
+        /* Remove the drop shadow from the button text so it looks clean */
+        .stButton > button[kind="primary"] p {{
+            text-shadow: none !important;
+        }}
         </style>
+        
+        <div class="bg-slider">
+            <div class="slide"></div>
+            <div class="slide"></div>
+            <div class="blur-overlay"></div>
+        </div>
         """, unsafe_allow_html=True
     )
+    
     logo_left, logo_center, logo_right = st.columns([2, 1, 2])
-    with logo_center: st.image("rectangle_logo.png", width=500)
-    st.markdown("<p style='text-align: center; color: gray;'>Project Pulse Student Management Portal</p>", unsafe_allow_html=True)
+    with logo_center: 
+        st.image("rectangle_logo.png", use_container_width=True)
+        
+    st.markdown("<p style='text-align: center; color: white; font-weight: 700; font-size: 1.2rem; text-shadow: 2px 2px 4px rgba(0,0,0,0.9), 0px 0px 8px rgba(0,0,0,1.0);'>Project Pulse Student Management Portal</p>", unsafe_allow_html=True)
     st.divider()
 
     _, col_mid, _ = st.columns([1, 1.2, 1])
     with col_mid:
         with st.container(border=True):
-            st.subheader("Account Login")
+            # Using inline HTML for the header guarantees the shadow applies regardless of Streamlit classes
+            st.markdown("<h3 style='color: white; font-weight: bold; text-shadow: 2px 2px 4px rgba(0,0,0,0.9), 0px 0px 10px rgba(0,0,0,1.0); margin-bottom: 10px;'>Account Login</h3>", unsafe_allow_html=True)
+            
             input_username = st.text_input("Username")
             input_password = st.text_input("Password", type="password")
 
@@ -515,7 +669,7 @@ def render_login_page():
                 else:
                     log_security_event(None, "LOGIN_FAILURE", "Invalid credentials provided.")
                     st.error("Authentication failed: Invalid username or password.")
-            st.caption("Default seeds: `dean_exec`, `chair_mba`, `admin_sec` | **Advisers:** `asmith`, `bjones`, `cbrown`, `dprince`")
+            st.caption("Default seeds: `dean_exec`, `chair_mba`, `admin_sec` | **Advisers:** `asmith`, `bjones`, `cbrown`, `dprince` | **Password:** `Password123!` ")
 
 if not st.session_state.authenticated:
     render_login_page()
@@ -539,7 +693,7 @@ if "admin_view" not in st.session_state:
 
 # 1. Define core app navigation options vs admin configuration options
 core_nav_options = ["Executive Dashboard", "Student Roster", "Student Profile Inspector"]
-admin_nav_options = ["Global Instance Settings", "Schema Mapping Config", "Permissions & Audit Logs"]
+admin_nav_options = ["Global Instance Settings", "Schema Mapping Config", "Permissions & Audit Logs", "UI & KPI Customization"]
 
 # Ensure current view is valid
 all_valid_options = core_nav_options + (admin_nav_options if user["role"] == "IT/Admin" else [])
@@ -554,7 +708,8 @@ if user["role"] == "IT/Admin":
         admin_nav_config = {
             "Global Instance Settings": "GLOBAL INSTANCE SETTINGS",
             "Schema Mapping Config": "SCHEMA MAPPING CONFIG",
-            "Permissions & Audit Logs": "PERMISSIONS & AUDIT LOGS"
+            "Permissions & Audit Logs": "PERMISSIONS & AUDIT LOGS",
+            "UI & KPI Customization": "UI & KPI CUSTOMIZATION"
         }
         
         for opt in admin_nav_options:
@@ -663,6 +818,9 @@ st.markdown(
 )
 
 # --- SIDEBAR FOOTER: Re-sync & Log Out ---
+# Balanced spacer to sit gracefully near the bottom
+st.sidebar.markdown('<div style="height: 9vh;"></div>', unsafe_allow_html=True)
+
 st.sidebar.markdown("---")
 
 if st.sidebar.button("RE-SYNC", use_container_width=True, key="footer_resync"):
@@ -673,6 +831,18 @@ if st.sidebar.button("RE-SYNC", use_container_width=True, key="footer_resync"):
 if st.sidebar.button("LOG OUT", use_container_width=True, key="footer_logout"):
     st.session_state.clear()
     st.rerun()
+
+# Display the Last Synced time anchored at the bottom of the sidebar
+try:
+    _, sidebar_sync_time = load_students(ACTIVE_PROGRAM)
+    st.sidebar.markdown(
+        f"<div style='text-align: center; color: #94a3b8; font-size: 0.7rem; margin-top: 10px; padding-bottom: 20px; line-height: 1.4;'>"
+        f"🕒 Data Last Synced:<br><b>{sidebar_sync_time}</b>"
+        f"</div>", 
+        unsafe_allow_html=True
+    )
+except Exception:
+    pass
 
 # ------------------------------------------------------------------
 # STYLED BANNER HEADER
@@ -906,6 +1076,63 @@ def render_permissions_and_logs():
                 st.success("✅ System is healthy. No synchronization errors logged.")
         else:
             st.success("✅ System is healthy. No synchronization errors logged.")
+
+# ------------------------------------------------------------------
+# VIEW: IT/ADMIN UI & KPI CUSTOMIZATION
+# ------------------------------------------------------------------
+def render_ui_kpi_customization():
+    st.subheader("🎨 UI & KPI Customization")
+    st.caption(f"Configure program-specific terminology and dashboard tiles for the **{ACTIVE_PROGRAM}** program. Changes apply instantly without redeploying code.")
+
+    t_terms, t_kpis = st.tabs(["Terminology Configuration", "KPI Tile Management"])
+
+    with t_terms:
+        st.markdown("##### 📝 Program-Specific Labels")
+        st.caption("Change how standard lifecycle stages are displayed across the dashboard, tables, and charts.")
+        with st.form("terminology_form"):
+            new_cw = st.text_input("Coursework Stage Label", value=TERM_MAP.get("Coursework", "Coursework"))
+            new_ce = st.text_input("Comprehensive Exam Label", value=TERM_MAP.get("Comprehensive Exam", "Comprehensive Exam"))
+            new_cap = st.text_input("Capstone Stage Label", value=TERM_MAP.get("Capstone", "Capstone"))
+            
+            if st.form_submit_button("Save Terminology", type="primary"):
+                try:
+                    with conn.session as s:
+                        q = text("""INSERT INTO custom_terminology (program_code, standard_term, custom_term) VALUES (:p, :st, :ct) ON CONFLICT (program_code, standard_term) DO UPDATE SET custom_term = EXCLUDED.custom_term;""")
+                        s.execute(q, {"p": ACTIVE_PROGRAM, "st": "Coursework", "ct": new_cw})
+                        s.execute(q, {"p": ACTIVE_PROGRAM, "st": "Comprehensive Exam", "ct": new_ce})
+                        s.execute(q, {"p": ACTIVE_PROGRAM, "st": "Capstone", "ct": new_cap})
+                        s.commit()
+                    log_security_event(user["user_id"], "TERMINOLOGY_UPDATED", f"Updated UI terminology for {ACTIVE_PROGRAM}.")
+                    st.success("Terminology updated successfully!")
+                    load_terminology.clear()
+                    st.rerun()
+                except Exception as e: st.error(f"Failed to update terminology: {e}")
+
+    with t_kpis:
+        st.markdown("##### 📊 Executive Dashboard KPIs")
+        st.caption("Toggle visibility, edit display labels, and adjust the order of the metric tiles shown on the main dashboard.")
+        with st.form("kpi_config_form"):
+            updated_kpis = []
+            for i, kpi in enumerate(KPI_CONFIG):
+                c1, c2, c3, c4 = st.columns([0.5, 2, 2, 1])
+                is_active = c1.checkbox("", value=kpi["is_active"], key=f"kpi_act_{i}")
+                c2.markdown(f"**{kpi['kpi_key']}**")
+                new_label = c3.text_input("Display Label", value=kpi["custom_label"], key=f"kpi_lbl_{i}", label_visibility="collapsed")
+                new_order = c4.number_input("Order", value=kpi["display_order"], step=1, key=f"kpi_ord_{i}", label_visibility="collapsed")
+                updated_kpis.append({"kpi_key": kpi["kpi_key"], "custom_label": new_label, "is_active": is_active, "display_order": new_order})
+                
+            if st.form_submit_button("Save KPI Configuration", type="primary"):
+                try:
+                    with conn.session as s:
+                        q = text("""INSERT INTO kpi_config (program_code, kpi_key, custom_label, is_active, display_order) VALUES (:p, :key, :lbl, :act, :ord) ON CONFLICT (program_code, kpi_key) DO UPDATE SET custom_label = EXCLUDED.custom_label, is_active = EXCLUDED.is_active, display_order = EXCLUDED.display_order;""")
+                        for kpi in updated_kpis:
+                            s.execute(q, {"p": ACTIVE_PROGRAM, "key": kpi["kpi_key"], "lbl": kpi["custom_label"], "act": kpi["is_active"], "ord": kpi["display_order"]})
+                        s.commit()
+                    log_security_event(user["user_id"], "KPI_CONFIG_UPDATED", f"Updated KPI tile configuration for {ACTIVE_PROGRAM}.")
+                    st.success("KPI configuration saved successfully!")
+                    load_kpi_config.clear()
+                    st.rerun()
+                except Exception as e: st.error(f"Failed to save KPI config: {e}")
 
 def render_completion_trend_chart(df_all, active_program):
     if df_all.empty:
@@ -1978,9 +2205,9 @@ def render_student_list(df_all):
             div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(2)::before { content: "NAME"; }
             div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(3)::before { content: "COHORT"; }
             div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(4)::before { content: "ADVISER"; }
-            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(5)::before { content: "COURSEWORK"; }
-            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(6)::before { content: "COMP EXAM"; }
-            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(7)::before { content: "CAPSTONE"; }
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(5)::before {{ content: "{TERM_MAP.get('Coursework', 'Coursework').upper()}"; }}
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(6)::before {{ content: "{TERM_MAP.get('Comprehensive Exam', 'Comprehensive Exam').upper()}"; }}
+            div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(7)::before {{ content: "{TERM_MAP.get('Capstone', 'Capstone').upper()}"; }}
             div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(8)::before { content: "LAST UPDATE"; }
             div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(9)::before { content: "RISK"; }
             div[data-testid="stHorizontalBlock"]:has(.roster-row-marker) > div:nth-child(10)::before { content: "ACTION"; }
@@ -2027,7 +2254,7 @@ def render_student_list(df_all):
     # Helper function to reuse the exact same grid layout across multiple pages
     def render_roster_grid(display_df, key_prefix):
         col_widths = [0.9, 1.5, 0.8, 1.5, 1.2, 1.2, 1.4, 0.9, 0.9, 0.8]
-        header_labels = ["STUDENT ID", "NAME", "COHORT", "ADVISER", "COURSEWORK", "COMP EXAM", "CAPSTONE", "LAST UPDATE", "RISK", "ACTION"]
+        header_labels = ["STUDENT ID", "NAME", "COHORT", "ADVISER", TERM_MAP.get("Coursework", "Coursework").upper(), TERM_MAP.get("Comprehensive Exam", "Comprehensive Exam").upper(), TERM_MAP.get("Capstone", "Capstone").upper(), "LAST UPDATE", "RISK", "ACTION"]
     
         scroll_kwargs = {"height": 600} if len(display_df) > 10 else {}
         
@@ -2308,17 +2535,36 @@ def render_student_list(df_all):
             unsafe_allow_html=True
         )
 
-        # Consolidated single row of 5 core metrics
-        m1, m2, m3, m4, m5 = st.columns(5)
-        
-        # Format the delta text for the first tile
+# Format the delta text for the first tile
         display_cohort_delta = "All Cohorts" if active_cohort == "All" else f"Cohort: {active_cohort}"
+        # Collect dynamic metric values
+        AVAILABLE_KPIS = {
+            "Total Students": {"value": total_students, "delta": display_cohort_delta, "delta_color": "off", "help": "Total students matching filters."},
+            "On-Time Grad Rate": {"value": f"{on_time_rate:.1f}%", "delta": grad_delta_str, "delta_color": grad_color_mode, "help": "Percentage of students on track to graduate within expected program duration."},
+            "Overall Completion": {"value": f"{completion_rate}%", "delta": comp_delta_str, "delta_color": comp_color_mode, "help": "Percentage of students who have fully completed all milestones."},
+            "Remaining Students": {"value": remaining_students, "delta": rem_delta_str, "delta_color": rem_color_mode, "help": "Students who have not yet completed all major milestones."},
+            "Students At Risk": {"value": at_risk_count, "delta": risk_delta_str, "delta_color": risk_color_mode, "help": "Students who have exceeded expected duration thresholds."}
+        }
         
-        m1.metric(label="Total Students", value=total_students, delta=display_cohort_delta, delta_color="off", help="Total students matching filters.")
-        m2.metric(label="On-Time Grad Rate", value=f"{on_time_rate:.1f}%", delta=grad_delta_str, delta_color=grad_color_mode, help="Percentage of students on track to graduate within expected program duration.")
-        m3.metric(label="Overall Completion", value=f"{completion_rate}%", delta=comp_delta_str, delta_color=comp_color_mode, help="Percentage of students who have fully completed coursework, comprehensive exam, and capstone.")
-        m4.metric(label="Remaining Students", value=remaining_students, delta=rem_delta_str, delta_color=rem_color_mode, help="Students who have not yet completed all three major milestones.")
-        m5.metric(label="Students At Risk", value=at_risk_count, delta=risk_delta_str, delta_color=risk_color_mode, help="Students who have exceeded expected duration thresholds.")
+        # Sort and filter active KPIs
+        active_kpis = [k for k in KPI_CONFIG if k["is_active"]]
+        active_kpis.sort(key=lambda x: x["display_order"])
+        
+        if not active_kpis:
+            st.info("No KPI tiles configured for display. Please enable them in Admin Configuration.")
+        else:
+            kpi_cols = st.columns(len(active_kpis)) # Native flexbox handles dynamic width!
+            for col, kpi in zip(kpi_cols, active_kpis):
+                kdata = AVAILABLE_KPIS.get(kpi["kpi_key"])
+                if kdata:
+                    col.metric(
+                        label=kpi["custom_label"], 
+                        value=kdata["value"], 
+                        delta=kdata["delta"], 
+                        delta_color=kdata["delta_color"], 
+                        help=kdata["help"]
+                    )
+        
         
         st.write("")
 
@@ -2328,7 +2574,10 @@ def render_student_list(df_all):
         with col1:
             with st.container(border=True): 
                 st.subheader("Lifecycle Stage Breakdown", help="Distribution of students across their current active lifecycle stage.")
-
+                stage_df = pd.DataFrame({
+                    "Lifecycle Stage": ["Overall Completion", TERM_MAP.get("Capstone", "Capstone"), TERM_MAP.get("Comprehensive Exam", "Comprehensive Exam"), TERM_MAP.get("Coursework", "Coursework")],
+                    "Students": [fully_completed, current_cap, current_ce, current_cw]
+                })
                 # Build the chart data using the strict buckets
                 stage_df = pd.DataFrame({
                     "Lifecycle Stage": ["Overall Completion", "Capstone", "Comprehensive Exam", "Coursework"],
@@ -2379,7 +2628,7 @@ def render_student_list(df_all):
                     selected_points = chart_event.selection.get("points", [])
                     if selected_points:
                         clicked_stage = selected_points[0].get("y")
-                        if clicked_stage in ["Coursework", "Comprehensive Exam", "Capstone", "Overall Completion"]:
+                        if clicked_stage in [TERM_MAP.get("Coursework", "Coursework"), TERM_MAP.get("Comprehensive Exam", "Comprehensive Exam"), TERM_MAP.get("Capstone", "Capstone"), "Overall Completion"]:
                             st.session_state.chart_filter_stage = clicked_stage
                     else: 
                         st.session_state.chart_filter_stage = None
@@ -2406,16 +2655,16 @@ def render_student_list(df_all):
             filtered_full_df = df_summary.copy()
             
             # Apply mutually exclusive "current stage" logic
-            if selected == "Coursework":
+            if selected == TERM_MAP.get("Coursework", "Coursework"):
                 filtered_full_df = filtered_full_df[filtered_full_df["coursework_display"] != "Completed"]
                 
-            elif selected == "Comprehensive Exam":
+            elif selected == TERM_MAP.get("Comprehensive Exam", "Comprehensive Exam"):
                 filtered_full_df = filtered_full_df[
                     (filtered_full_df["coursework_display"] == "Completed") & 
                     (filtered_full_df["comprehensive_exam_display"] != "Passed")
                 ]
                 
-            elif selected == "Capstone":
+            elif selected == TERM_MAP.get("Capstone", "Capstone"):
                 filtered_full_df = filtered_full_df[
                     (filtered_full_df["coursework_display"] == "Completed") & 
                     (filtered_full_df["comprehensive_exam_display"] == "Passed") & 
@@ -2665,21 +2914,21 @@ def render_student_profile(df_all):
     p1, p2, p3 = st.columns(3)
     with p1:
         with st.container(border=True):
-            st.markdown("**📚 Coursework Stage**")
+            st.markdown(f"**📚 {TERM_MAP.get('Coursework', 'Coursework')} Stage**")
             st.markdown(student["coursework_indicator"], unsafe_allow_html=True)
             st.caption(f"Status: {student['coursework_display']}")
             st.caption(f"🕒 Last Updated: `{cw_updated}`")
             
     with p2:
         with st.container(border=True):
-            st.markdown("**📝 Comprehensive Examination**")
+            st.markdown(f"**📝 {TERM_MAP.get('Comprehensive Exam', 'Comprehensive Exam')}**")
             st.markdown(student["exam_indicator"], unsafe_allow_html=True)
             st.caption(f"Status: {student['comprehensive_exam_display']}")
             st.caption(f"🕒 Last Updated: `{ce_updated}`")
             
     with p3:
         with st.container(border=True):
-            st.markdown("**🎓 Capstone & Defense**")
+            st.markdown(f"**🎓 {TERM_MAP.get('Capstone', 'Capstone')} & Defense**")
             st.markdown(student["capstone_indicator"], unsafe_allow_html=True)
             st.caption(f"Adviser: **{student.get('adviser') or 'Unassigned'}**")
             st.caption(f"🕒 Last Updated: `{cap_updated}`")
@@ -2730,10 +2979,10 @@ def render_student_profile(df_all):
 
         c_form1, c_form2 = st.columns(2)
         with c_form1:
-            new_cw = st.selectbox("Coursework Status", cw_opts, index=get_idx(student["coursework_display"], cw_opts))
-            new_ce = st.selectbox("Comprehensive Exam Status", ce_opts, index=get_idx(student["comprehensive_exam_display"], ce_opts))
+            new_cw = st.selectbox(f"{TERM_MAP.get('Coursework', 'Coursework')} Status", cw_opts, index=get_idx(student["coursework_display"], cw_opts))
+            new_ce = st.selectbox(f"{TERM_MAP.get('Comprehensive Exam', 'Comprehensive Exam')} Status", ce_opts, index=get_idx(student["comprehensive_exam_display"], ce_opts))
         with c_form2:
-            new_cap = st.selectbox("Capstone Status", cap_opts, index=get_idx(student["capstone_display"], cap_opts))
+            new_cap = st.selectbox(f"{TERM_MAP.get('Capstone', 'Capstone')} Status", cap_opts, index=get_idx(student["capstone_display"], cap_opts))
             new_adv = st.selectbox("Primary Adviser", adv_list, index=get_idx(curr_adv, adv_list))
 
         existing_remarks = str(student["remarks"]) if pd.notna(student["remarks"]) else ""
@@ -2863,11 +3112,13 @@ elif st.session_state.admin_view == "Schema Mapping Config":
     render_schema_mapping()
 elif st.session_state.admin_view == "Permissions & Audit Logs":
     render_permissions_and_logs()
+elif st.session_state.admin_view == "UI & KPI Customization":
+    render_ui_kpi_customization()
 else:
     try:
             df_all, last_sync = load_students(ACTIVE_PROGRAM)
             st.session_state.consecutive_sync_failures = 0
-            st.caption(f"🕒 **Data Last Synchronized:** `{last_sync}`")
+            
             
             if st.session_state.admin_view == "Student Profile Inspector": 
                 render_student_profile(df_all)
