@@ -892,10 +892,12 @@ def finalize_import_to_database():
                         """),
                         {"course_code": course_code}
                     ).fetchone()
-
+                    
                     if not course_exists:
                         continue
-
+                    
+                    course_code = course_exists[0]
+                    
                     enrollment_params = {
                         "student_number": student_number,
                         "course_code": course_code,
