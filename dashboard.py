@@ -670,11 +670,11 @@ for opt in core_nav_options:
             st.session_state.admin_view = opt
             st.rerun()
     if user.get("can_import_data", False):
-    if st.sidebar.button(
-        "ADD DATA",
-        key="nav_btn_add_data",
-        use_container_width=True
-    ):
+        if st.sidebar.button(
+            "ADD DATA",
+            key="nav_btn_add_data",
+            use_container_width=True
+        ):
         st.session_state.admin_view = "Add Data"
         st.rerun()
 st.markdown(
