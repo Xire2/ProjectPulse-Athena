@@ -2251,51 +2251,85 @@ def render_completion_trend_chart(df_all, active_program):
     if df_all.empty:
         st.info("No data available to display completion trends.")
         return
-    df_all['is_completed'] = df_all['coursework_display'] == 'Completed'
-    trend_df = df_all.groupby('cohort').agg(
-        total_students=('coursework_display', 'count'),
-        completed_students=('is_completed', 'sum')
-    ).reset_index()
-    
-    trend_df['completion_rate'] = (trend_df['completed_students'] / trend_df['total_students']) * 100
-    trend_df['sort_year'] = trend_df['cohort'].astype(str).str.extract(r'[TQ](\d{2})')[0].astype(float)
-    trend_df['sort_term'] = trend_df['cohort'].astype(str).str.extract(r'^(\d)[TQ]')[0].astype(float)
-    
-    trend_df = trend_df.dropna(subset=['sort_year', 'sort_term']).sort_values(by=['sort_year', 'sort_term']).tail(4) 
-    
-    if trend_df.empty:
-        st.info("Not enough standard cohort terms (e.g., 1Q2425) to form a trend line.")
+
+    terms_df = conn.query("""
+        SELECT term_id, term_code, start_date
+        FROM term
+        WHERE start_date IS NOT NULL
+        ORDER BY start_date DESC
+        LIMIT 4;
+    """, ttl=0)
+
+    if terms_df.empty:
+        st.info("No academic terms are available for the completion trend.")
         return
 
+    trend_rows = []
+
+    for _, term in terms_df.iterrows():
+        term_id = int(term["term_id"])
+        term_code = str(term["term_code"])
+
+        term_df = df_all[df_all["term_id"] == term_id].copy()
+
+        if term_df.empty:
+            continue
+
+        total_students = len(term_df)
+        completed_students = (
+            term_df["coursework_display"] == "Completed"
+        ).sum()
+
+        if total_students > 0:
+            completion_rate = completed_students / total_students * 100
+            trend_rows.append({
+                "term_code": term_code,
+                "completion_rate": completion_rate,
+                "sort_date": term["start_date"]
+            })
+
+    trend_df = pd.DataFrame(trend_rows)
+    if trend_df.empty:
+        st.info("No completion data is available for the last 4 terms.")
+        return
+    trend_df = trend_df.sort_values("sort_date")
+
     fig = px.line(
-        trend_df, x="cohort", y="completion_rate", markers=True,
-        text="completion_rate", # Binds the data values to text labels
-        labels={"cohort": "Academic Term", "completion_rate": "Completion Rate (%)"}
+        trend_df,
+        x="term_code",
+        y="completion_rate",
+        markers=True,
+        text="completion_rate",
+        labels={
+            "term_code": "Academic Term",
+            "completion_rate": "Completion Rate (%)"
+        }
     )
-    
+
     fig.update_layout(
-        height=377, # Explicitly matched height
+        height=377,
         yaxis_title="Completion Rate (%)",
         xaxis_title="Academic Term",
-        yaxis=dict(range=[-5, 115], fixedrange=True), 
-        xaxis=dict(fixedrange=True), 
+        yaxis=dict(range=[-5, 115], fixedrange=True),
+        xaxis=dict(fixedrange=True),
         hovermode="x unified",
         margin=dict(l=10, r=10, t=30, b=10)
     )
-    
-    # Format the labels as 1-decimal percentages and place them above the markers
+
     fig.update_traces(
-        line_color="#D50000", # Program palette red for the trend line
-        marker=dict(color="#FFAE00", size=8), # Program palette yellow for the dots
-        line_width=3, 
-        texttemplate='%{text:.1f}%', 
-        textposition='top center',
+        line_color="#D50000",
+        marker=dict(color="#FFAE00", size=8),
+        line_width=3,
+        texttemplate="%{text:.1f}%",
+        textposition="top center",
         textfont=dict(size=12, color="var(--text-color)")
     )
-    
-    st.subheader(f"Completion Trend — Last 4 Terms", help="Shows the percentage of students in each cohort who have successfully completed all core coursework.")
-    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
+    st.subheader(
+        "Completion Trend — Last 4 Terms",
+        help="Shows the percentage of students who completed their coursework in each academic term."
+    )
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 # ------------------------------------------------------------------
 # VIEW 1: STUDENT ROSTER (Dashboard)
 # ------------------------------------------------------------------
