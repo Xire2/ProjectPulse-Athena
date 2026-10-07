@@ -834,7 +834,7 @@ st.markdown(
 
 # --- SIDEBAR FOOTER: Re-sync & Log Out ---
 # Balanced spacer to sit gracefully near the bottom
-st.sidebar.markdown('<div style="height: 15vh;"></div>', unsafe_allow_html=True)
+st.sidebar.markdown('<div style="height: 9vh;"></div>', unsafe_allow_html=True)
 
 st.sidebar.markdown("---")
 
