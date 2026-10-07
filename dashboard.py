@@ -7,9 +7,15 @@ Streamlit app for Program Chairs, Faculty/Program Advisors, and the Dean.
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.io as pio
 from sqlalchemy import text
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from io import BytesIO
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import landscape, A4
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
 import re
 import os
 
@@ -932,7 +938,322 @@ def render_completion_trend_chart(df_all, active_program):
     
     st.subheader(f"Completion Trend — Last 4 Terms", help="Shows the percentage of students in each cohort who have successfully completed all core coursework.")
     st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+def create_executive_dashboard_pdf(df_summary, summary_label, last_sync):
+    total_students = len(df_summary)
+    cw_completed = len(df_summary[df_summary["coursework_display"] == "Completed"])
+    exam_passed = len(df_summary[df_summary["comprehensive_exam_display"] == "Passed"])
+    capstone_defended = len(df_summary[df_summary["capstone_display"] == "Defended"])
 
+    evaluated_df = df_summary[
+        df_summary["graduate_on_time"].notna() &
+        (df_summary["graduate_on_time"].astype(str).str.strip() != "") &
+        (~df_summary["graduate_on_time"].astype(str).str.lower().isin(["n/a", "none"]))
+    ]
+
+    grad_numerator = len(
+        evaluated_df[
+            evaluated_df["graduate_on_time"].astype(str).str.lower().isin(
+                ["yes", "y", "true", "1"]
+            )
+        ]
+    )
+
+    on_time_rate = (grad_numerator / total_students * 100) if total_students > 0 else 0.0
+
+    fully_completed = len(
+        df_summary[
+            (df_summary["coursework_display"] == "Completed") &
+            (df_summary["comprehensive_exam_display"] == "Passed") &
+            (df_summary["capstone_display"] == "Defended")
+        ]
+    )
+
+    completion_rate = int((fully_completed / total_students * 100)) if total_students > 0 else 0
+    remaining_students = total_students - fully_completed
+    at_risk_count = int(df_summary["is_at_risk"].sum())
+
+    current_cw = len(df_summary[df_summary["coursework_display"] != "Completed"])
+
+    current_ce = len(
+        df_summary[
+            (df_summary["coursework_display"] == "Completed") &
+            (df_summary["comprehensive_exam_display"] != "Passed")
+        ]
+    )
+
+    current_cap = len(
+        df_summary[
+            (df_summary["coursework_display"] == "Completed") &
+            (df_summary["comprehensive_exam_display"] == "Passed") &
+            (df_summary["capstone_display"] != "Defended")
+        ]
+    )
+
+    stage_df = pd.DataFrame({
+        "Lifecycle Stage": [
+            "Overall Completion",
+            "Capstone",
+            "Comprehensive Exam",
+            "Coursework"
+        ],
+        "Students": [
+            fully_completed,
+            current_cap,
+            current_ce,
+            current_cw
+        ]
+    })
+
+    stage_df["Percentage"] = (
+        stage_df["Students"] / total_students * 100
+        if total_students > 0 else 0
+    )
+
+    lifecycle_fig = px.bar(
+        stage_df,
+        x="Percentage",
+        y="Lifecycle Stage",
+        orientation="h",
+        text="Percentage",
+        range_x=[0, 100],
+        labels={
+            "Percentage": "Percentage of Active Students",
+            "Lifecycle Stage": ""
+        }
+    )
+
+    lifecycle_fig.update_traces(
+        marker_color=["#0DC249", "#D50000", "#FFAE00", "#0072B2"],
+        texttemplate="%{text:.2f}%",
+        textposition="outside"
+    )
+
+    lifecycle_fig.update_layout(
+        height=300,
+        margin=dict(l=10, r=40, t=20, b=10),
+        xaxis=dict(range=[0, 100], ticksuffix="%", dtick=20),
+        yaxis=dict(
+            categoryorder="array",
+            categoryarray=[
+                "Overall Completion",
+                "Capstone",
+                "Comprehensive Exam",
+                "Coursework"
+            ]
+        ),
+        showlegend=False,
+        paper_bgcolor="white",
+        plot_bgcolor="white"
+    )
+
+    trend_source = df_summary.copy()
+    trend_source["is_completed"] = (
+        trend_source["coursework_display"] == "Completed"
+    )
+
+    trend_df = trend_source.groupby("cohort").agg(
+        total_students=("coursework_display", "count"),
+        completed_students=("is_completed", "sum")
+    ).reset_index()
+
+    trend_df["completion_rate"] = (
+        trend_df["completed_students"] /
+        trend_df["total_students"] * 100
+    )
+
+    trend_df["sort_year"] = (
+        trend_df["cohort"]
+        .astype(str)
+        .str.extract(r"[TQ](\d{2})")
+        .astype(float)
+    )
+
+    trend_df["sort_term"] = (
+        trend_df["cohort"]
+        .astype(str)
+        .str.extract(r"^(\d)[TQ]")
+        .astype(float)
+    )
+
+    trend_df = (
+        trend_df
+        .dropna(subset=["sort_year", "sort_term"])
+        .sort_values(by=["sort_year", "sort_term"])
+        .tail(4)
+    )
+
+    trend_fig = px.line(
+        trend_df,
+        x="cohort",
+        y="completion_rate",
+        markers=True,
+        text="completion_rate",
+        labels={
+            "cohort": "Academic Term",
+            "completion_rate": "Completion Rate (%)"
+        }
+    )
+
+    trend_fig.update_layout(
+        height=300,
+        margin=dict(l=10, r=10, t=20, b=10),
+        yaxis=dict(range=[-5, 115]),
+        xaxis=dict(title="Academic Term"),
+        yaxis_title="Completion Rate (%)",
+        hovermode="x unified"
+    )
+
+    trend_fig.update_traces(
+        line_color="#D50000",
+        marker=dict(color="#FFAE00", size=8),
+        line_width=3,
+        texttemplate="%{text:.1f}%",
+        textposition="top center"
+    )
+
+    lifecycle_png = pio.to_image(
+        lifecycle_fig,
+        format="png",
+        width=850,
+        height=300,
+        scale=2
+    )
+
+    trend_png = pio.to_image(
+        trend_fig,
+        format="png",
+        width=850,
+        height=300,
+        scale=2
+    )
+
+    pdf_buffer = BytesIO()
+
+    doc = SimpleDocTemplate(
+        pdf_buffer,
+        pagesize=landscape(A4),
+        rightMargin=24,
+        leftMargin=24,
+        topMargin=20,
+        bottomMargin=20
+    )
+
+    styles = getSampleStyleSheet()
+    story = []
+
+    story.append(
+        Paragraph(
+            f"<b>Project Pulse — Executive Dashboard</b>",
+            styles["Title"]
+        )
+    )
+
+    story.append(
+        Paragraph(
+            f"{ACTIVE_PROGRAM} Program · {summary_label}",
+            styles["Normal"]
+        )
+    )
+
+    story.append(
+        Paragraph(
+            f"<b>Data Last Synchronized:</b> {last_sync}",
+            styles["Normal"]
+        )
+    )
+
+    story.append(Spacer(1, 8))
+
+    kpi_data = [
+        [
+            "TOTAL STUDENTS",
+            "COURSEWORK",
+            "COMP EXAM",
+            "CAPSTONES",
+            "ON-TIME GRAD",
+            "COMPLETION",
+            "REMAINING",
+            "AT RISK"
+        ],
+        [
+            str(total_students),
+            str(cw_completed),
+            str(exam_passed),
+            str(capstone_defended),
+            f"{on_time_rate:.1f}%",
+            f"{completion_rate}%",
+            str(remaining_students),
+            str(at_risk_count)
+        ]
+    ]
+
+    kpi_table = Table(
+        kpi_data,
+        colWidths=[85] * 8
+    )
+
+    kpi_table.setStyle(
+        TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F2F2F2")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#666666")),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTNAME", (0, 1), (-1, 1), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, 0), 7),
+            ("FONTSIZE", (0, 1), (-1, 1), 15),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#DDDDDD")),
+            ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#DDDDDD")),
+            ("TOPPADDING", (0, 0), (-1, -1), 7),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ])
+    )
+
+    story.append(kpi_table)
+    story.append(Spacer(1, 8))
+
+    chart_table = Table(
+        [
+            [
+                Image(BytesIO(lifecycle_png), width=365, height=129),
+                Image(BytesIO(trend_png), width=365, height=129)
+            ]
+        ],
+        colWidths=[380, 380]
+    )
+
+    chart_table.setStyle(
+        TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ])
+    )
+
+    story.append(chart_table)
+    story.append(Spacer(1, 6))
+
+    risk_text = (
+        f"<b>At-Risk Students:</b> {at_risk_count} "
+        f"student(s) currently exceed the expected duration threshold "
+        f"for their current lifecycle stage."
+    )
+
+    story.append(Paragraph(risk_text, styles["Normal"]))
+
+    story.append(Spacer(1, 4))
+
+    story.append(
+        Paragraph(
+            "Mapúa University · ETYSB Success Advisor Dashboard · "
+            "Leadership Meeting View",
+            styles["Normal"]
+        )
+    )
+
+    doc.build(story)
+
+    pdf_buffer.seek(0)
+    return pdf_buffer.getvalue()
 # ------------------------------------------------------------------
 # VIEW 1: STUDENT ROSTER (Dashboard)
 # ------------------------------------------------------------------
@@ -1171,7 +1492,13 @@ def render_student_list(df_all):
 
     # --- RENDER EXECUTIVE DASHBOARD ---
     if st.session_state.admin_view == "Executive Dashboard":
-        st.markdown(f"#### Executive Summary — {summary_label}")
+            title_col, export_col = st.columns([5, 1], vertical_alignment="bottom")
+    
+            with title_col:
+                st.markdown(f"#### Executive Summary — {summary_label}")
+    
+            with export_col:
+                pdf_button_placeholder = st.empty()
         
         # --- Dashboard Filters (No Search or Sort) ---
         cohort_col, adv_col = st.columns(2)
@@ -1193,6 +1520,21 @@ def render_student_list(df_all):
         # Apply Adviser Filter to the dashboard metrics!
         if selected_adviser != "All":
             df_summary = df_summary[df_summary["adviser"].astype(str) == selected_adviser]
+
+        pdf_data = create_executive_dashboard_pdf(
+            df_summary,
+            summary_label,
+            st.session_state.get("last_sync", "Unknown")
+        )
+
+        with pdf_button_placeholder:
+            st.download_button(
+                label="📄 Export PDF",
+                data=pdf_data,
+                file_name=f"{ACTIVE_PROGRAM}_Executive_Dashboard.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
             
         total_students = len(df_summary)
         cw_completed = len(df_summary[df_summary["coursework_display"] == "Completed"])
@@ -1795,6 +2137,7 @@ elif st.session_state.admin_view == "Permissions & Audit Logs":
 else:
     try:
             df_all, last_sync = load_students(ACTIVE_PROGRAM)
+            st.session_state.last_sync = last_sync
             st.session_state.consecutive_sync_failures = 0
             st.caption(f"🕒 **Data Last Synchronized:** `{last_sync}`")
             
