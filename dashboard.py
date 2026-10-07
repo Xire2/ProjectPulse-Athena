@@ -754,6 +754,8 @@ def finalize_import_to_database():
 
     try:
         with conn.session as s:
+            debug_course = s.execute(text("SELECT course_code FROM courses WHERE UPPER(TRIM(course_code)) = 'MBAC602' LIMIT 1;")).fetchone()
+            st.write("DEBUG MBAC602:", debug_course)
             imported_students = 0
             imported_courses = 0
             imported_lifecycle = 0
